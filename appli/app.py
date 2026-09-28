@@ -135,7 +135,18 @@ CREATE INDEX idx_images_entity ON images(entity, entity_id);
 # Pour faire évoluer la base : ajouter une étape à la fin de cette liste
 # (ex. "ALTER TABLE ads ADD COLUMN format TEXT NOT NULL DEFAULT ''").
 # Chaque étape n'est jouée qu'une fois (numéro stocké dans PRAGMA user_version).
-MIGRATIONS = [SCHEMA_V1]
+SCHEMA_V2 = """
+CREATE TABLE ad_platforms (
+    ad_id INTEGER NOT NULL REFERENCES ads(id) ON DELETE CASCADE,
+    platform_id INTEGER NOT NULL REFERENCES platforms(id) ON DELETE CASCADE,
+    PRIMARY KEY (ad_id, platform_id)
+);
+CREATE INDEX idx_adplat_platform ON ad_platforms(platform_id);
+INSERT INTO ad_platforms(ad_id, platform_id) SELECT id, platform_id FROM ads WHERE platform_id IS NOT NULL;
+UPDATE ads SET platform_id = NULL;
+"""
+
+MIGRATIONS = [SCHEMA_V1, SCHEMA_V2]
 
 PLATFORMS = [
     ("Famicom", "Nintendo"), ("Famicom Disk System", "Nintendo"), ("Super Famicom", "Nintendo"),
@@ -151,7 +162,7 @@ PLATFORMS = [
     ("Neo Geo", "SNK"), ("Neo Geo CD", "SNK"), ("Neo Geo Pocket", "SNK"), ("WonderSwan", "Bandai"),
     ("3DO", "Panasonic"), ("Xbox", "Microsoft"), ("Xbox 360", "Microsoft"), ("MSX", ""),
     ("PC-8801", "NEC"), ("PC-9801", "NEC"), ("X68000", "Sharp"), ("FM Towns", "Fujitsu"),
-    ("PC (Windows)", ""), ("Arcade", ""), ("Multi-plateformes", ""),
+    ("PC (Windows)", ""), ("Arcade", ""),
 ]
 
 
@@ -234,7 +245,7 @@ SPEC = {
                "notes": ("text", False)},
     "games": {"title": ("text", True), "original_title": ("text", False), "series_id": ("fk", False),
               "publisher": ("text", False), "year": ("int", False), "notes": ("text", False)},
-    "ads": {"game_id": ("fk", True), "platform_id": ("fk", False), "description": ("text", False),
+    "ads": {"game_id": ("fk", True), "description": ("text", False),
             "pages": ("real", False), "notes": ("text", False)},
     "appearances": {"ad_id": ("fk", True), "issue_id": ("fk", True), "page": ("text", False),
                     "for_sale": ("bool", False), "notes": ("text", False)},
@@ -303,9 +314,31 @@ JOIN ads a ON a.id = ap.ad_id
 JOIN games g ON g.id = a.game_id
 JOIN issues i ON i.id = ap.issue_id
 JOIN magazines m ON m.id = i.magazine_id
-LEFT JOIN platforms p ON p.id = a.platform_id
 LEFT JOIN series s ON s.id = g.series_id
 """
+
+
+def ad_platforms_sql(ad_expr):
+    """Noms des plateformes d'une pub, « PS4 / Switch »."""
+    return (f"(SELECT group_concat(name, ' / ') FROM (SELECT p.name FROM ad_platforms x "
+            f"JOIN platforms p ON p.id = x.platform_id WHERE x.ad_id = {ad_expr} ORDER BY p.name))")
+
+
+def has_platform_sql(ad_expr):
+    return f"EXISTS (SELECT 1 FROM ad_platforms x WHERE x.ad_id = {ad_expr} AND x.platform_id = ?)"
+
+
+def set_ad_platforms(db, ad_id, ids):
+    if ids is None:
+        return
+    if not isinstance(ids, list):
+        raise ApiError(400, "Plateformes : liste attendue")
+    try:
+        ids = sorted({int(i) for i in ids})
+    except (TypeError, ValueError):
+        raise ApiError(400, "Plateformes invalides")
+    db.execute("DELETE FROM ad_platforms WHERE ad_id = ?", (ad_id,))
+    db.executemany("INSERT INTO ad_platforms(ad_id, platform_id) VALUES (?, ?)", [(ad_id, i) for i in ids])
 
 NUM_ORDER = "CAST({0} AS INTEGER), {0}"
 
@@ -313,9 +346,9 @@ NUM_ORDER = "CAST({0} AS INTEGER), {0}"
 def list_platforms(db, qs):
     return rows(db.execute("""
         SELECT p.*,
-          (SELECT COUNT(*) FROM ads a WHERE a.platform_id = p.id) AS ads_count,
-          (SELECT COUNT(*) FROM appearances ap JOIN ads a ON a.id = ap.ad_id
-             WHERE a.platform_id = p.id) AS app_count
+          (SELECT COUNT(*) FROM ad_platforms x WHERE x.platform_id = p.id) AS ads_count,
+          (SELECT COUNT(*) FROM appearances ap JOIN ad_platforms x ON x.ad_id = ap.ad_id
+             WHERE x.platform_id = p.id) AS app_count
         FROM platforms p ORDER BY p.name"""))
 
 
@@ -378,8 +411,11 @@ def list_games(db, qs, gid=None):
         where.append("g.series_id = ?")
         params.append(qs["series_id"])
     w = ("WHERE " + " AND ".join(where)) if where else ""
-    return rows(db.execute(f"""
+    res = rows(db.execute(f"""
         SELECT g.*, s.name AS series_name,
+          (SELECT group_concat(name, ' / ') FROM (SELECT DISTINCT p.name FROM ads a
+             JOIN ad_platforms x ON x.ad_id = a.id JOIN platforms p ON p.id = x.platform_id
+             WHERE a.game_id = g.id ORDER BY p.name)) AS platforms,
           (SELECT COUNT(*) FROM ads a WHERE a.game_id = g.id) AS ads_count,
           (SELECT COUNT(*) FROM appearances ap JOIN ads a ON a.id = ap.ad_id
              WHERE a.game_id = g.id) AS app_count,
@@ -394,6 +430,7 @@ def list_games(db, qs, gid=None):
              WHERE a.game_id = g.id ORDER BY im.sort, im.id LIMIT 1)) AS thumb_url
         FROM games g LEFT JOIN series s ON s.id = g.series_id {w}
         ORDER BY g.title COLLATE NOCASE, g.year""", params))
+    return res
 
 
 def list_ads(db, qs, aid=None):
@@ -410,18 +447,21 @@ def list_ads(db, qs, aid=None):
             where.append("(g.title LIKE ? ESCAPE '\\' OR g.original_title LIKE ? ESCAPE '\\' "
                          "OR a.description LIKE ? ESCAPE '\\' OR a.notes LIKE ? ESCAPE '\\')")
             params += [like(q)] * 4
-    for key, col in (("game_id", "a.game_id"), ("platform_id", "a.platform_id"),
-                     ("series_id", "g.series_id")):
+    for key, col in (("game_id", "a.game_id"), ("series_id", "g.series_id")):
         if qs.get(key):
             where.append(f"{col} = ?")
             params.append(qs[key])
+    if qs.get("platform_id"):
+        where.append(has_platform_sql("a.id"))
+        params.append(qs["platform_id"])
     if qs.get("sans_image") == "1":
         where.append("NOT EXISTS (SELECT 1 FROM images im WHERE im.entity = 'ads' AND im.entity_id = a.id)")
     w = ("WHERE " + " AND ".join(where)) if where else ""
     order = "a.id DESC" if qs.get("tri") == "recent" else "g.title COLLATE NOCASE, a.id"
-    return rows(db.execute(f"""
+    res = rows(db.execute(f"""
         SELECT a.*, g.title AS game_title, g.original_title, g.series_id,
-          p.name AS platform_name, s.name AS series_name,
+          {ad_platforms_sql('a.id')} AS platform_name, s.name AS series_name,
+          (SELECT group_concat(platform_id) FROM ad_platforms x WHERE x.ad_id = a.id) AS platform_ids,
           (SELECT COUNT(*) FROM appearances ap WHERE ap.ad_id = a.id) AS app_count,
           (SELECT COUNT(*) FROM appearances ap WHERE ap.ad_id = a.id AND ap.for_sale = 1) AS sale_count,
           (SELECT COUNT(*) FROM images im WHERE im.entity = 'ads' AND im.entity_id = a.id) AS img_count,
@@ -429,9 +469,11 @@ def list_ads(db, qs, aid=None):
              WHERE ap.ad_id = a.id) AS first_date,
           {img_url('ads', 'a.id')} AS thumb_url
         FROM ads a JOIN games g ON g.id = a.game_id
-        LEFT JOIN platforms p ON p.id = a.platform_id
         LEFT JOIN series s ON s.id = g.series_id {w}
         ORDER BY {order}""", params))
+    for r in res:
+        r["platform_ids"] = [int(x) for x in (r["platform_ids"] or "").split(",") if x]
+    return res
 
 
 def search(db, qs, limit=None, offset=0):
@@ -448,7 +490,9 @@ def search(db, qs, limit=None, offset=0):
     eq("numero", "i.number")
     eq("game_id", "a.game_id")
     eq("series_id", "g.series_id")
-    eq("platform_id", "a.platform_id")
+    if qs.get("platform_id"):
+        where.append(has_platform_sql("a.id"))
+        params.append(qs["platform_id"])
     if qs.get("ad_id"):
         where.append("ap.ad_id = ?")
         params.append(str(qs["ad_id"]).lstrip("#"))
@@ -484,7 +528,7 @@ def search(db, qs, limit=None, offset=0):
     items = rows(db.execute(f"""
         SELECT ap.id, ap.page, ap.for_sale, ap.notes, ap.ad_id, ap.issue_id, ap.created_at,
           i.number, i.date, m.id AS magazine_id, m.name AS magazine,
-          g.id AS game_id, g.title AS game, g.original_title, p.id AS platform_id, p.name AS platform,
+          g.id AS game_id, g.title AS game, g.original_title, {ad_platforms_sql('a.id')} AS platform,
           s.id AS series_id, s.name AS series, a.description, a.pages,
           COALESCE({img_url('appearances', 'ap.id')}, {img_url('ads', 'a.id')}) AS thumb_url
         {APP_JOIN} {w} ORDER BY {order} {lim}""", params))
@@ -769,8 +813,10 @@ def load_demo():
                            ("Biohazard 2", "PlayStation", "Leon & Claire", 2),
                            ("Sakura Taisen", "Sega Saturn", "Sakura au sabre", 1),
                            ("Dragon Quest VII", "PlayStation", "Logo + illustration", 2)):
-            aid.append(db.execute("INSERT INTO ads(game_id, platform_id, description, pages, notes) "
-                                  "VALUES (?,?,?,?,?)", (gid[g], pid[p], d, n, "DÉMO")).lastrowid)
+            ad = db.execute("INSERT INTO ads(game_id, description, pages, notes) VALUES (?,?,?,?)",
+                            (gid[g], d, n, "DÉMO")).lastrowid
+            set_ad_platforms(db, ad, [pid[x] for x in p.split("|")])
+            aid.append(ad)
         for m, num, date, page, ad, sale in (
                 ("Weekly Famitsu", "421", "1997-01-03", "12", 0, 1),
                 ("Weekly Famitsu", "421", "1997-01-03", "40", 3, 0),
@@ -1008,6 +1054,8 @@ class Handler(BaseHTTPRequestHandler):
                 marks = ", ".join("?" for _ in data)
                 new_id = db.execute(f"INSERT INTO {head} ({cols}) VALUES ({marks})",
                                     list(data.values())).lastrowid
+                if head == "ads":
+                    set_ad_platforms(db, new_id, body.get("platform_ids", []))
             return self.send_json(detail(db, head, new_id), 201)
 
         if method == "PUT" and rid is not None:
@@ -1022,6 +1070,8 @@ class Handler(BaseHTTPRequestHandler):
                     cur = db.execute(f"UPDATE {head} SET {sets} WHERE id = ?", list(data.values()) + [rid])
                     if cur.rowcount == 0:
                         raise ApiError(404, "Élément introuvable")
+                if head == "ads":
+                    set_ad_platforms(db, rid, body.get("platform_ids"))
             return self.send_json(detail(db, head, rid))
 
         if method == "DELETE" and rid is not None:

@@ -45,7 +45,7 @@ Double-cliquer alors qu'elle tourne déjà rouvre simplement l'onglet.
 |---|---|
 | **Saisie rapide** | Choisir un magazine + un numéro, puis enchaîner les pubs trouvées dedans : pub, page, en vente ○/×, remarques, photo. Les magazines, numéros, jeux, séries et pubs manquants se créent au passage. |
 | **Recherche** | Recherche croisée : magazine, numéro, année, jeu, série, plateforme, n° de pub, en vente, mot-clé. Statistiques + export CSV du résultat. |
-| **Pubs** | Galerie de toutes les pubs (un visuel = une pub, avec un n° unique). Fiche : images, et **tous les magazines où on la trouve**. |
+| **Pubs** | Galerie de toutes les pubs (un visuel = une pub, avec un n° unique, une ou **plusieurs plateformes** cochées). Fiche : images, et **tous les magazines où on la trouve**. |
 | **Jeux** | Liste triable (nb de pubs, de parutions, 1re parution). Fiche : toutes ses pubs et toutes ses parutions. |
 | **Magazines** | Magazines > numéros > **les pubs de chaque numéro**, avec la couverture. |
 | **Séries & plateformes** | Les listes de référence (plateformes japonaises déjà remplies). |
@@ -53,10 +53,18 @@ Double-cliquer alors qu'elle tourne déjà rouvre simplement l'onglet.
 
 ### Images
 
-Sur chaque pub, numéro (couverture) ou parution (photo de l'exemplaire) :
-**glisser-déposer**, **cliquer** pour choisir un fichier, ou **coller** une capture (Ctrl+V).
-Les miniatures sont créées automatiquement ; un clic sur une image l'affiche en grand (flèches
-← → pour passer à la suivante). L'étoile ★ choisit l'image principale.
+L'image d'une pub se met **sur la pub** : une même pub parue dans 5 magazines n'a besoin que
+d'une image, visible depuis ses 5 parutions.
+
+- Nouvelle pub : zone « Image de la pub » dans sa fenêtre de création.
+- Pub existante sans image : dans la saisie rapide, une zone apparaît dans son aperçu
+  (sinon, depuis sa fiche).
+- Couverture d'un numéro : dans la saisie rapide (à droite) ou sur la fiche du numéro.
+- Photo de *votre* exemplaire (état, pour la vente), facultatif : bouton ✎ d'une parution.
+
+Glisser-déposer, cliquer pour choisir un fichier, ou coller une capture (Ctrl+V). Les miniatures
+sont créées automatiquement ; un clic sur une image l'affiche en grand (flèches ← →). L'étoile ★
+choisit l'image principale.
 
 ### Saisie au clavier
 

@@ -336,10 +336,11 @@ async function uploadFiles(files, entity, entityId) {
   return n;
 }
 
-function dropzone(onFiles, text = 'Déposer des images ici') {
-  const dz = el('div', 'dropzone', `<b>${esc(text)}</b><br><small>glisser-déposer, cliquer pour choisir, ou coller (Ctrl+V)</small>
+function dropzone(onFiles, text = 'Déposer des images ici', { paste = true } = {}) {
+  const dz = el('div', 'dropzone', `<b>${esc(text)}</b><br><small>glisser-déposer, cliquer pour choisir${paste ? ', ou coller (Ctrl+V)' : ''}</small>
       <input type="file" accept="image/*,.heic" multiple hidden>`);
   dz.tabIndex = 0;
+  if (paste) dz.dataset.paste = '1';
   const input = $('input', dz);
   const handle = async files => {
     files = [...files];
@@ -362,7 +363,7 @@ document.addEventListener('paste', e => {
   const files = [...(e.clipboardData?.files || [])].filter(isImageFile);
   if (!files.length) return;
   const scope = overlays[overlays.length - 1] || $('#main');
-  const dz = $('.dropzone', scope);
+  const dz = $('.dropzone[data-paste]', scope);
   if (!dz || !dz._onFiles) return;
   e.preventDefault();
   dz._onFiles(files);
@@ -422,7 +423,7 @@ function lightbox(list, start = 0) {
 }
 
 // Galerie des images d'un élément + zone d'ajout
-function galleryBlock(images, { entity, entityId, onChange, dropText = 'Ajouter des images', big = false }) {
+function galleryBlock(images, { entity, entityId, onChange, dropText = 'Ajouter des images', big = false, paste = true }) {
   const wrap = el('div');
   if (images.length) {
     const g = el('div', 'gallery' + (big ? ' big' : ''));
@@ -454,7 +455,7 @@ function galleryBlock(images, { entity, entityId, onChange, dropText = 'Ajouter 
       }
     });
   }
-  wrap.append(dropzone(async files => { if (await uploadFiles(files, entity, entityId)) onChange(); }, dropText));
+  wrap.append(dropzone(async files => { if (await uploadFiles(files, entity, entityId)) onChange(); }, dropText, { paste }));
   return wrap;
 }
 
@@ -468,9 +469,13 @@ function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', on
     form.noValidate = true;
     const ctrls = {};
     for (const f of fields) {
-      const row = el(f.type === 'combo' ? 'div' : 'label', 'field' + (f.wide ? ' wide' : ''));
+      const row = el(f.type === 'combo' || f.type === 'custom' ? 'div' : 'label', 'field' + (f.wide ? ' wide' : ''));
       row.innerHTML = `<span>${esc(f.label)}${f.required ? ' <b class="req">*</b>' : ''}</span>`;
-      if (f.type === 'combo') {
+      if (f.type === 'custom') {
+        const c = f.custom(values[f.name]);
+        row.append(c.el);
+        ctrls[f.name] = { get: () => c.get(), focus: () => c.focus() };
+      } else if (f.type === 'combo') {
         const c = f.combo(values[f.name]);
         row.append(c.el);
         ctrls[f.name] = { get: () => c.value, focus: () => c.focus(), c };
@@ -528,9 +533,55 @@ function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', on
   });
 }
 
-async function platformOptions() {
-  const meta = await getMeta();
-  return [{ value: '', label: '—' }, ...meta.platforms.map(p => ({ value: p.id, label: p.name }))];
+/* Plateformes à cocher (plusieurs possibles). Les plus utilisées apparaissent en premier. */
+function platformPicker(initial = []) {
+  const sel = new Set((initial || []).map(Number));
+  const wrap = el('div', 'picker', `<input type="search" placeholder="Filtrer les plateformes…">
+      <div class="chips"></div><div class="picked muted"></div>`);
+  const input = $('input', wrap), box = $('.chips', wrap), picked = $('.picked', wrap);
+  let list = [];
+  const draw = () => {
+    const words = norm(input.value).split(/\s+/).filter(Boolean);
+    const shown = list.filter(p => sel.has(p.id) || words.every(w => norm(p.name + ' ' + p.maker).includes(w)));
+    box.innerHTML = shown.map(p => `<button type="button" class="chip ${sel.has(p.id) ? 'on' : ''}" data-id="${p.id}">${sel.has(p.id) ? '✓ ' : ''}${esc(p.name)}</button>`).join('')
+      + (input.value.trim() && !list.some(p => norm(p.name) === norm(input.value.trim()))
+        ? `<button type="button" class="chip create" data-create="1">＋ Créer « ${esc(input.value.trim())} »</button>` : '');
+    const names = list.filter(p => sel.has(p.id)).map(p => p.name);
+    picked.textContent = names.length ? `Sélection : ${names.join(' / ')}` : 'Aucune plateforme cochée';
+  };
+  const load = async () => {
+    const meta = await getMeta();
+    list = [...meta.platforms].sort((a, b) => (b.ads_count - a.ads_count) || a.name.localeCompare(b.name, 'fr'));
+    draw();
+  };
+  box.addEventListener('click', async e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.create) {
+      const pl = await POST('platforms', { name: input.value.trim() });
+      invalidate();
+      sel.add(pl.id);
+      input.value = '';
+      await load();
+      return;
+    }
+    const id = +b.dataset.id;
+    if (sel.has(id)) sel.delete(id); else sel.add(id);
+    draw();
+  });
+  input.addEventListener('input', draw);
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const first = $('.chip:not(.on)', box);
+    if (first && input.value.trim()) { first.click(); input.value = ''; draw(); }
+  });
+  load();
+  return {
+    el: wrap, get: () => [...sel], focus: () => input.focus(),
+    set(ids) { sel.clear(); (ids || []).forEach(i => sel.add(+i)); draw(); },
+    get size() { return sel.size; },
+  };
 }
 
 async function openGameForm(values = {}) {
@@ -557,9 +608,15 @@ async function openGameForm(values = {}) {
 
 async function openAdForm(values = {}, { gameText } = {}) {
   const isNew = !values.id;
-  const platforms = await platformOptions();
   let pending;
   let gameCtl;
+  let picker;
+  // Nouvelle pub : reprendre les plateformes de la dernière pub du même jeu
+  const suggestPlatforms = async game => {
+    if (!isNew || !game || !picker || picker.size) return;
+    const last = (await getAds()).filter(a => a.game_id === game.id).sort((a, b) => b.id - a.id)[0];
+    if (last && last.platform_ids.length) picker.set(last.platform_ids);
+  };
   return formModal({
     title: isNew ? 'Nouvelle pub' : `Modifier la pub #${values.id}`,
     values: { pages: 1, ...values },
@@ -567,7 +624,7 @@ async function openAdForm(values = {}, { gameText } = {}) {
       {
         name: 'game_id', label: 'Jeu', type: 'combo', required: true, wide: true,
         combo: v => {
-          gameCtl = gameCombo({ value: v });
+          gameCtl = gameCombo({ value: v, onChange: g => suggestPlatforms(g) });
           if (gameText && !v) {
             gameCtl.input.value = gameText;
           }
@@ -575,15 +632,20 @@ async function openAdForm(values = {}, { gameText } = {}) {
         },
         help: 'Pas encore dans la liste ? Tapez le titre puis « Nouveau jeu ».',
       },
-      { name: 'platform_id', label: 'Plateforme', type: 'select', options: platforms },
+      {
+        name: 'platform_ids', label: 'Plateformes annoncées sur la pub', type: 'custom', wide: true,
+        custom: v => { picker = platformPicker(v); if (values.game_id) getGames().then(gs => suggestPlatforms(gs.find(g => g.id === values.game_id))); return picker; },
+        help: 'Cliquer pour cocher / décocher. Plusieurs possibles (ex. PS4 + Switch).',
+      },
+      { name: 'description', label: 'Description / visuel', placeholder: 'Ce qui distingue cette pub : visuel, slogan…' },
       { name: 'pages', label: 'Nb de pages', type: 'number', step: '0.5', help: '1, 2 (double page), 0,5…' },
-      { name: 'description', label: 'Description / visuel', wide: true, placeholder: 'Ce qui distingue cette pub : visuel, slogan…' },
       { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
     ],
     extra: form => {
       if (!isNew) return null;
-      pending = pendingImages('Image(s) de la pub');
+      pending = pendingImages('Image de la pub (photo ou scan)');
       const row = el('div', 'field wide');
+      row.innerHTML = '<span>Image</span>';
       row.append(pending.el);
       form.append(row);
       return pending;
@@ -651,12 +713,12 @@ async function openAppearanceForm(values = {}) {
       { name: 'notes', label: 'Remarques', type: 'textarea', wide: true, placeholder: 'État, prix, scan fait…' },
     ],
     extra: form => {
+      if (isNew) return;
       const row = el('div', 'field wide');
-      row.innerHTML = '<span>Photo de cet exemplaire (facultatif)</span>';
-      if (isNew) {
-        pending = pendingImages('Image(s) de cet exemplaire');
-        row.append(pending.el);
-      } else {
+      row.innerHTML = `<span>Photo de VOTRE exemplaire (facultatif)</span>
+        <small>Seulement pour garder une trace de votre page à vous : état, photo pour la vente…
+        L'image de la pub elle-même se met sur la fiche de la pub.</small>`;
+      {
         const holder = el('div');
         const draw = async () => {
           const d = await GET(`appearances/${values.id}`);
@@ -809,10 +871,6 @@ async function pageEntry(view, params) {
               <label class="yes"><input type="radio" name="sale" value="1">${MARU} Oui</label>
             </div></div>
           <label class="field wide"><span>Remarques</span><input id="f-notes" placeholder="État, prix, scan fait…"></label>
-          <div class="field wide"><span>Image</span><div id="f-img"></div>
-            <label class="muted" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px">Associer à :
-              <select id="f-img-target" style="width:auto;max-width:100%"><option value="ads">la pub (visuel commun à toutes ses parutions)</option>
-              <option value="appearances">cet exemplaire seulement</option></select></label></div>
           <div class="form-error" id="f-err"></div>
           <div class="actions"><span class="kbd" style="margin-right:auto;align-self:center"><kbd>Entrée</kbd> ou <kbd>Ctrl</kbd>+<kbd>Entrée</kbd> pour enregistrer</span>
             <button type="submit" class="primary big">Enregistrer</button></div>
@@ -828,27 +886,34 @@ async function pageEntry(view, params) {
   const form = $('#entry', view);
   const numI = $('#f-num', view), dateI = $('#f-date', view), pageI = $('#f-page', view), notesI = $('#f-notes', view);
   const status = $('#issue-status', view), err = $('#f-err', view);
-  const targetSel = $('#f-img-target', view);
   let issue = null; // numéro existant correspondant (ou null)
 
   const mag = magazineCombo({ onChange: () => refreshIssue() });
   $('#f-mag', view).append(mag.el);
   const ad = adCombo({ onChange: a => showAd(a) });
   $('#f-ad', view).append(ad.el);
-  const pending = pendingImages('Photo / scan de la pub');
-  $('#f-img', view).append(pending.el);
-
+  // Aperçu de la pub choisie. Si elle n'a pas encore d'image, une zone permet de l'ajouter
+  // tout de suite (l'image est rattachée à la pub : elle vaudra pour toutes ses parutions).
   function showAd(a) {
     const box = $('#ad-preview', view);
     if (!a) { box.innerHTML = ''; return; }
-    targetSel.value = a.img_count ? 'appearances' : 'ads';
     const dup = lastItems.filter(r => r.ad_id === a.id);
     box.innerHTML = `<div class="ad-preview">${a.thumb_url ? `<img src="${esc(a.thumb_url)}" alt="">` : '<div class="thumb-none">▢</div>'}
-      <div><b>${esc(a.game_title)}</b> <span class="muted">${esc(a.platform_name || '')}</span><br>
+      <div style="flex:1;min-width:0"><b>${esc(a.game_title)}</b> <span class="muted">${esc(a.platform_name || '')}</span><br>
       ${esc(a.description || '')}<br>
-      <small>Pub #${a.id} · ${fmtPages(a.pages) || '?'} p. · déjà vue ${plural(a.app_count, 'fois', 'fois')}${a.img_count ? '' : ' · <b>pas encore d\'image</b>'}</small>
+      <small>Pub #${a.id} · ${fmtPages(a.pages) || '?'} p. · déjà vue ${plural(a.app_count, 'fois', 'fois')}</small>
       ${dup.length ? `<div class="warn">Déjà saisie dans ce numéro (p. ${dup.map(r => esc(r.page) || '?').join(', ')})</div>` : ''}
-      <div style="margin-top:4px"><a href="#/pubs/${a.id}" target="_blank" tabindex="-1">ouvrir la fiche ↗</a></div></div></div>`;
+      <div style="margin-top:4px"><a href="#/pubs/${a.id}" target="_blank" tabindex="-1">ouvrir la fiche ↗</a></div>
+      <div class="ad-img-slot" style="margin-top:8px"></div></div></div>`;
+    if (!a.img_count) {
+      const dz = dropzone(async files => {
+        if (!await uploadFiles(files, 'ads', a.id)) return;
+        await ad.reload();
+        showAd(ad.item);
+      }, 'Cette pub n\'a pas encore d\'image : ajouter la photo / le scan');
+      dz.tabIndex = -1; // Tab passe directement de « Pub » à « Page »
+      $('.ad-img-slot', box).append(dz);
+    }
   }
 
   let lastItems = [];
@@ -880,7 +945,7 @@ async function pageEntry(view, params) {
       const inIssue = $('#in-issue', view);
       inIssue.replaceChildren(appTable(issue.appearances, { hide: ['issue', 'platform'], onChange: () => refreshIssue(), emptyText: 'Aucune pub saisie pour l\'instant.' }));
       $('#cover-card', view).hidden = false;
-      $('#cover', view).replaceChildren(galleryBlock(issue.images, { entity: 'issues', entityId: issue.id, onChange: refreshIssue, dropText: 'Ajouter la couverture' }));
+      $('#cover', view).replaceChildren(galleryBlock(issue.images, { entity: 'issues', entityId: issue.id, onChange: refreshIssue, dropText: 'Ajouter la couverture', paste: false }));
     } else {
       status.innerHTML = '<span class="badge">nouveau numéro</span> il sera créé au premier enregistrement';
       lastItems = [];
@@ -905,15 +970,10 @@ async function pageEntry(view, params) {
         magazine_id: mag.value, issue_number: numI.value.trim(), issue_date: dateI.value.trim(),
         ad_id: ad.value, page: pageI.value.trim(), for_sale: saleVal, notes: notesI.value.trim(),
       });
-      if (pending.files.length) {
-        const target = targetSel.value;
-        await uploadFiles(pending.files, target, target === 'ads' ? a.ad_id : a.id);
-      }
       invalidate();
       toast(`Enregistré : ${a.game} ${a.page ? 'p.' + a.page : ''}`);
       pageI.value = '';
       notesI.value = '';
-      pending.clear();
       ad.clear();
       $('input[name=sale][value="0"]', form).checked = true;
       await refreshIssue();
@@ -1096,7 +1156,7 @@ async function pageGames(view, params) {
   for (const [k, v] of Object.entries(params)) { const e = tb.querySelector(`[name="${k}"]`); if (e) e.value = v; }
   let sortKey = 'title', sortDir = 1, list = [];
   function draw() {
-    const cols = [['title', 'Titre'], ['series_name', 'Série'], ['publisher', 'Éditeur'], ['year', 'Année', 'num'],
+    const cols = [['title', 'Titre'], ['series_name', 'Série'], ['platforms', 'Plateformes'], ['publisher', 'Éditeur'], ['year', 'Année', 'num'],
       ['ads_count', 'Pubs', 'num'], ['app_count', 'Parutions', 'num'], ['sale_count', 'En vente', 'num'], ['first_date', '1re parution']];
     const sorted = [...list].sort((a, b) => {
       const x = a[sortKey] ?? '', y = b[sortKey] ?? '';
@@ -1106,7 +1166,7 @@ async function pageGames(view, params) {
       `<th class="${c || ''}" data-k="${k}" style="cursor:pointer">${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
       <tbody>${sorted.map(g => `<tr class="clickable" data-id="${g.id}"><td class="thumb">${thumbImg(g.thumb_url)}</td>
         <td><b>${esc(g.title)}</b><div class="muted">${esc(g.original_title)}</div></td><td>${esc(g.series_name || '')}</td>
-        <td>${esc(g.publisher)}</td><td class="num">${g.year ?? ''}</td><td class="num">${g.ads_count}</td>
+        <td class="muted">${esc(g.platforms || '')}</td><td>${esc(g.publisher)}</td><td class="num">${g.year ?? ''}</td><td class="num">${g.ads_count}</td>
         <td class="num">${g.app_count}</td><td class="num">${g.sale_count}</td><td>${esc(g.first_date || '')}</td></tr>`).join('')}</tbody></table>`
       : '<p class="empty">Aucun jeu.</p>';
   }
@@ -1134,7 +1194,8 @@ async function pageGame(view, params, id) {
     const g = await GET(`games/${id}`);
     view.innerHTML = `
       <div class="page-head"><div><div class="crumbs"><a href="#/jeux">Jeux</a></div>
-        <h1>${esc(g.title)}</h1><div class="sub">${esc([g.original_title, g.series_name && 'série ' + g.series_name, g.publisher, g.year].filter(Boolean).join(' · '))}</div></div>
+        <h1>${esc(g.title)}</h1><div class="sub">${esc([g.original_title, g.series_name && 'série ' + g.series_name, g.publisher, g.year].filter(Boolean).join(' · '))}</div>
+        ${g.platforms ? `<div class="sub">Plateformes (d'après ses pubs) : <b>${esc(g.platforms)}</b></div>` : ''}</div>
         <div class="btns"><button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
       <div class="tiles">
         <div class="tile"><div class="n">${g.ads_count}</div><div class="l">pub${g.ads_count > 1 ? 's' : ''} différente${g.ads_count > 1 ? 's' : ''}</div></div>

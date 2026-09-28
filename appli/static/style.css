@@ -317,3 +317,14 @@ dl.info dd { margin: 0; }
 header.top .quit { margin-left: auto; padding: 5px 10px; color: var(--muted); font-size: 13px; }
 header.top .quit:hover { color: var(--no); }
 .overlay.stopped { z-index: 90; place-items: center; }
+
+/* ---------- Plateformes à cocher ---------- */
+.picker input[type="search"] { margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 168px; overflow: auto; padding: 2px; }
+.chip {
+  padding: 4px 10px; border-radius: 20px; font-size: 13px; background: var(--panel-2);
+  border: 1px solid var(--line); color: var(--text);
+}
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.chip.create { color: var(--accent); border-style: dashed; }
+.picked { font-size: 12px; margin-top: 6px; }
