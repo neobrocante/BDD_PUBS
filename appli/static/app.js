@@ -1,0 +1,1359 @@
+'use strict';
+/* BDD Pubs : interface web (aucune dépendance externe). */
+
+// ===========================================================================
+// Outils
+// ===========================================================================
+const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC[c]);
+const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const MARU = '○', BATSU = '×';
+
+function el(tag, cls, html) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html != null) e.innerHTML = html;
+  return e;
+}
+
+function debounce(fn, ms = 250) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+function qs(obj) {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(obj)) if (v !== '' && v != null) p.set(k, v);
+  return p.toString();
+}
+
+const fmtPages = n => n == null || n === '' ? '' : String(n).replace('.', ',');
+const plural = (n, s, p) => `${n} ${n > 1 ? (p || s + 's') : s}`;
+const imgSrc = im => im.thumb ? '/miniatures/' + im.thumb : '/images/' + im.file;
+const thumbImg = (url, cls = 'thumb-img') => url
+  ? `<img class="${cls}" loading="lazy" src="${esc(url)}" alt="">`
+  : `<div class="thumb-none" title="Pas d'image">▢</div>`;
+const saleBtn = v => `<button type="button" class="sale ${v ? 'on' : 'off'}" data-act="sale" title="En vente : cliquer pour changer">${v ? MARU : BATSU}</button>`;
+const adLabel = a => `#${a.id} · ${a.game_title}${a.platform_name ? ' · ' + a.platform_name : ''}${a.description ? ' — ' + a.description : ''}`;
+
+// ===========================================================================
+// API
+// ===========================================================================
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) {
+    opt.headers['Content-Type'] = 'application/json';
+    opt.body = JSON.stringify(body);
+  }
+  const r = await fetch('/api/' + url, opt);
+  let data = null;
+  try { data = await r.json(); } catch (_) { /* pas de JSON */ }
+  if (!r.ok) throw new Error((data && data.error) || `Erreur ${r.status}`);
+  return data;
+}
+const GET = u => api('GET', u);
+const POST = (u, b) => api('POST', u, b);
+const PUT = (u, b) => api('PUT', u, b);
+const DEL = u => api('DELETE', u);
+
+// Petites listes gardées en mémoire, rechargées après chaque modification
+const cache = {};
+function invalidate() { for (const k of Object.keys(cache)) delete cache[k]; }
+async function cached(key, loader) {
+  if (!cache[key]) cache[key] = loader().catch(e => { delete cache[key]; throw e; });
+  return cache[key];
+}
+const getMeta = () => cached('meta', () => GET('meta'));
+const getGames = () => cached('games', () => GET('games'));
+const getAds = () => cached('ads', () => GET('ads'));
+
+// ===========================================================================
+// Notifications, modales, confirmation
+// ===========================================================================
+function toast(msg, kind = 'ok') {
+  const t = el('div', 'toast' + (kind === 'err' ? ' err' : ''));
+  t.textContent = msg;
+  $('#toasts').append(t);
+  setTimeout(() => t.remove(), kind === 'err' ? 6000 : 2800);
+}
+window.addEventListener('unhandledrejection', e => toast(e.reason?.message || String(e.reason), 'err'));
+
+const overlays = [];
+function openModal(title, body, { wide = false, onClose } = {}) {
+  const ov = el('div', 'overlay');
+  ov.innerHTML = `<div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true">
+      <header><h2></h2><button type="button" class="icon" data-close title="Fermer (Échap)">✕</button></header>
+      <div class="modal-body"></div></div>`;
+  $('h2', ov).textContent = title;
+  $('.modal-body', ov).append(body);
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    ov.remove();
+    overlays.splice(overlays.indexOf(ov), 1);
+    onClose && onClose();
+  };
+  ov._close = close;
+  $('[data-close]', ov).addEventListener('click', close);
+  document.body.append(ov);
+  overlays.push(ov);
+  return { el: ov, close };
+}
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if ($('.lightbox')) { $('.lightbox').remove(); return; }
+  const top = overlays[overlays.length - 1];
+  if (top) { e.preventDefault(); top._close(); }
+});
+
+function confirmBox(msg, okLabel = 'Supprimer') {
+  return new Promise(resolve => {
+    const body = el('div', null, `<p style="margin-top:0">${esc(msg)}</p>
+      <div class="actions"><button type="button" data-no>Annuler</button>
+      <button type="button" class="primary" data-yes>${esc(okLabel)}</button></div>`);
+    let answered = false;
+    const m = openModal('Confirmer', body, { onClose: () => { if (!answered) resolve(false); } });
+    $('[data-no]', body).onclick = () => m.close();
+    $('[data-yes]', body).onclick = () => { answered = true; m.close(); resolve(true); };
+    setTimeout(() => $('[data-yes]', body).focus(), 20);
+  });
+}
+
+// ===========================================================================
+// Liste déroulante avec recherche (« combo ») + création à la volée
+// ===========================================================================
+function combo(opts) {
+  const { source, label, render, extra, placeholder = '', onCreate, onChange = () => {} } = opts;
+  const createText = opts.createText || (t => `＋ Créer « ${t} »`);
+  const wrap = el('div', 'combo', '<input type="text" autocomplete="off" spellcheck="false"><ul class="combo-list" hidden></ul>');
+  const input = $('input', wrap), list = $('ul', wrap);
+  input.placeholder = placeholder;
+  let items = null, selected = null, shown = [], active = -1;
+
+  const ensure = async force => { if (!items || force) items = await source(); return items; };
+  const opts$ = () => $$('li[data-i],li[data-create]', list);
+  const close = () => { list.hidden = true; active = -1; };
+
+  let openSeq = 0;
+  async function open() {
+    const seq = ++openSeq;
+    await ensure();
+    if (seq !== openSeq) return; // une frappe plus récente a déjà relancé l'affichage
+    const txt = input.value.trim();
+    const words = norm(txt).split(/\s+/).filter(Boolean);
+    const showAll = (selected && input.value === label(selected)) || !words.length;
+    shown = showAll ? items.slice(0, 300)
+      : items.filter(it => {
+        const t = norm(label(it) + ' ' + (extra ? extra(it) : ''));
+        return words.every(w => t.includes(w));
+      }).slice(0, 150);
+    const lis = shown.map((it, i) =>
+      `<li data-i="${i}" class="${selected && it.id === selected.id ? 'sel' : ''}">${render ? render(it) : esc(label(it))}</li>`);
+    const canCreate = onCreate && txt && !showAll && !items.some(it => norm(label(it)) === norm(txt));
+    if (canCreate) lis.push(`<li data-create="1" class="create">${esc(createText(txt))}</li>`);
+    if (!lis.length) lis.push('<li class="empty">Aucun résultat</li>');
+    list.innerHTML = lis.join('');
+    list.hidden = false;
+    active = !showAll && (shown.length || canCreate) ? 0 : -1;
+    highlight();
+  }
+  function highlight() {
+    opts$().forEach((li, i) => li.classList.toggle('active', i === active));
+    const a = opts$()[active];
+    if (a) a.scrollIntoView({ block: 'nearest' });
+  }
+  function setItem(it, silent) {
+    selected = it || null;
+    input.value = it ? label(it) : '';
+    wrap.classList.remove('invalid');
+    if (!silent) onChange(selected);
+  }
+  async function choose(idx) {
+    const li = opts$()[idx];
+    if (!li) return;
+    close();
+    if (li.dataset.create) {
+      const created = await onCreate(input.value.trim());
+      if (created) { await ensure(true); setItem(items.find(x => x.id === created.id) || created); }
+      input.focus();
+      return;
+    }
+    setItem(shown[+li.dataset.i]);
+  }
+
+  input.addEventListener('focus', () => { input.select(); ensure(); });
+  input.addEventListener('mousedown', () => { if (list.hidden) open(); });
+  input.addEventListener('input', () => { if (selected) { selected = null; onChange(null); } open(); });
+  input.addEventListener('keydown', e => {
+    const n = opts$().length;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (list.hidden) open(); else { active = Math.min(n - 1, active + 1); highlight(); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); active = Math.max(0, active - 1); highlight();
+    } else if (e.key === 'Enter') {
+      if (!list.hidden && active >= 0) { e.preventDefault(); e.stopPropagation(); choose(active); }
+      else if (!selected && input.value.trim()) {
+        // texte tapé mais liste pas encore affichée : on attend la liste puis on prend le 1er résultat
+        e.preventDefault(); e.stopPropagation();
+        open().then(() => { if (active >= 0) choose(active); });
+      }
+    } else if (e.key === 'Tab') {
+      const li = opts$()[active];
+      if (!list.hidden && li && !li.dataset.create && !selected) choose(active);
+      close();
+    } else if (e.key === 'Escape') {
+      if (!list.hidden) { e.stopPropagation(); close(); }
+    }
+  });
+  list.addEventListener('mousedown', e => {
+    const li = e.target.closest('li[data-i],li[data-create]');
+    if (!li) return;
+    e.preventDefault();
+    choose(opts$().indexOf(li));
+  });
+  input.addEventListener('blur', () => setTimeout(() => {
+    if (document.activeElement === input) return;
+    close();
+    wrap.classList.toggle('invalid', !selected && !!input.value.trim());
+  }, 150));
+
+  const c = {
+    el: wrap, input,
+    get value() { return selected ? selected.id : null; },
+    get item() { return selected; },
+    async set(id, silent) { await ensure(); setItem(items.find(it => it.id === id) || null, silent); },
+    setItem, clear() { setItem(null); },
+    async reload() { await ensure(true); if (selected) setItem(items.find(it => it.id === selected.id) || null, true); },
+    focus() { input.focus(); },
+  };
+  if (opts.value != null) c.set(opts.value, true);
+  return c;
+}
+
+// Combos prêts à l'emploi --------------------------------------------------
+function magazineCombo(extraOpts = {}) {
+  return combo({
+    source: async () => (await getMeta()).magazines,
+    label: m => m.name,
+    placeholder: 'Famitsu, Dengeki…',
+    onCreate: async name => {
+      const m = await POST('magazines', { name });
+      invalidate();
+      toast(`Magazine « ${m.name} » créé`);
+      return m;
+    },
+    ...extraOpts,
+  });
+}
+
+function seriesCombo(extraOpts = {}) {
+  return combo({
+    source: async () => (await getMeta()).series,
+    label: s => s.name,
+    placeholder: 'Aucune',
+    onCreate: async name => {
+      const s = await POST('series', { name });
+      invalidate();
+      toast(`Série « ${s.name} » créée`);
+      return s;
+    },
+    ...extraOpts,
+  });
+}
+
+function gameCombo(extraOpts = {}) {
+  return combo({
+    source: getGames,
+    label: g => g.title + (g.year ? ` (${g.year})` : ''),
+    extra: g => `${g.original_title} ${g.series_name || ''}`,
+    render: g => `<div>${esc(g.title)}${g.year ? ` <span class="opt-sub">(${g.year})</span>` : ''}
+        <div class="opt-sub">${esc([g.original_title, g.series_name].filter(Boolean).join(' · '))}</div></div>`,
+    placeholder: 'Tapez le titre…',
+    onCreate: title => openGameForm({ title }),
+    createText: t => `＋ Nouveau jeu « ${t} »`,
+    ...extraOpts,
+  });
+}
+
+function adCombo(extraOpts = {}) {
+  return combo({
+    source: getAds,
+    label: adLabel,
+    extra: a => `${a.original_title} ${a.series_name || ''} ${a.notes}`,
+    render: a => `${a.thumb_url ? `<img class="opt-thumb" src="${esc(a.thumb_url)}" alt="">` : '<span class="opt-thumb"></span>'}
+        <div><b>#${a.id}</b> ${esc(a.game_title)} <span class="opt-sub">${esc(a.platform_name || '')}</span>
+        <div class="opt-sub">${esc(a.description || '—')} · vue ${plural(a.app_count, 'fois', 'fois')}</div></div>`,
+    placeholder: 'Nom du jeu, description ou n° de pub…',
+    onCreate: text => openAdForm({}, { gameText: text }),
+    createText: t => `＋ Nouvelle pub « ${t} »`,
+    ...extraOpts,
+  });
+}
+
+// ===========================================================================
+// Images : envoi, zone de dépôt, galerie, visionneuse
+// ===========================================================================
+function readDataURL(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(new Error('Lecture du fichier impossible'));
+    r.readAsDataURL(file);
+  });
+}
+
+async function makeThumb(file, max = 520) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * k);
+    c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.82);
+  } catch (_) {
+    return null; // format non lisible par le navigateur (HEIC…) : pas de miniature
+  }
+}
+
+const isImageFile = f => f.type.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp|tiff?|avif|heic)$/i.test(f.name);
+
+async function uploadFiles(files, entity, entityId) {
+  let n = 0;
+  for (const f of files) {
+    if (!isImageFile(f)) { toast(`${f.name} : ce n'est pas une image`, 'err'); continue; }
+    let name = f.name || 'image.png';
+    if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + ((f.type.split('/')[1] || 'png').replace('jpeg', 'jpg'));
+    const [data, thumb] = await Promise.all([readDataURL(f), makeThumb(f)]);
+    await POST('images', { entity, entity_id: entityId, name, data, thumb });
+    n++;
+  }
+  if (n) { invalidate(); toast(`${plural(n, 'image ajoutée', 'images ajoutées')}`); }
+  return n;
+}
+
+function dropzone(onFiles, text = 'Déposer des images ici') {
+  const dz = el('div', 'dropzone', `<b>${esc(text)}</b><br><small>glisser-déposer, cliquer pour choisir, ou coller (Ctrl+V)</small>
+      <input type="file" accept="image/*,.heic" multiple hidden>`);
+  dz.tabIndex = 0;
+  const input = $('input', dz);
+  const handle = async files => {
+    files = [...files];
+    if (!files.length) return;
+    dz.classList.add('busy');
+    try { await onFiles(files); } catch (e) { toast(e.message, 'err'); } finally { dz.classList.remove('busy'); }
+  };
+  dz._onFiles = handle;
+  dz.addEventListener('click', () => input.click());
+  dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  input.addEventListener('change', () => { handle(input.files); input.value = ''; });
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); handle(e.dataTransfer.files); });
+  return dz;
+}
+
+// Ctrl+V d'une image : va dans la zone de dépôt de la fenêtre active (modale en priorité)
+document.addEventListener('paste', e => {
+  const files = [...(e.clipboardData?.files || [])].filter(isImageFile);
+  if (!files.length) return;
+  const scope = overlays[overlays.length - 1] || $('#main');
+  const dz = $('.dropzone', scope);
+  if (!dz || !dz._onFiles) return;
+  e.preventDefault();
+  dz._onFiles(files);
+});
+
+// Images choisies avant que l'élément n'existe (envoyées à l'enregistrement)
+function pendingImages(text) {
+  const files = [];
+  const wrap = el('div');
+  const prev = el('div', 'previews');
+  const draw = () => {
+    prev.innerHTML = '';
+    files.forEach((f, i) => {
+      const fig = el('figure');
+      const img = el('img');
+      img.src = URL.createObjectURL(f);
+      img.onerror = () => img.replaceWith(el('div', 'file', esc(f.name)));
+      const b = el('button', null, '✕');
+      b.type = 'button';
+      b.title = 'Retirer';
+      b.onclick = () => { files.splice(i, 1); draw(); };
+      fig.append(img, b);
+      prev.append(fig);
+    });
+  };
+  wrap.append(dropzone(fs => { files.push(...fs); draw(); }, text), prev);
+  return { el: wrap, files, clear() { files.length = 0; draw(); } };
+}
+
+function lightbox(list, start = 0) {
+  if (!list.length) return;
+  let i = start;
+  const lb = el('div', 'lightbox', `<img alt=""><div class="lb-bar"></div>
+      <button type="button" class="lb-close" title="Fermer">✕</button>
+      <button type="button" class="lb-prev" title="Précédente">‹</button>
+      <button type="button" class="lb-next" title="Suivante">›</button>`);
+  const draw = () => {
+    const im = list[i];
+    $('img', lb).src = im.url;
+    $('.lb-bar', lb).innerHTML = `${esc(im.caption || '')} ${list.length > 1 ? `(${i + 1}/${list.length})` : ''}
+        <a href="${esc(im.url)}" target="_blank" rel="noopener">ouvrir l'original</a>`;
+    $('.lb-prev', lb).hidden = $('.lb-next', lb).hidden = list.length < 2;
+  };
+  const move = d => { i = (i + d + list.length) % list.length; draw(); };
+  $('.lb-close', lb).onclick = () => lb.remove();
+  $('.lb-prev', lb).onclick = e => { e.stopPropagation(); move(-1); };
+  $('.lb-next', lb).onclick = e => { e.stopPropagation(); move(1); };
+  lb.addEventListener('click', e => { if (e.target === lb) lb.remove(); });
+  const onKey = e => {
+    if (!document.body.contains(lb)) return document.removeEventListener('keydown', onKey);
+    if (e.key === 'ArrowLeft') move(-1);
+    if (e.key === 'ArrowRight') move(1);
+  };
+  document.addEventListener('keydown', onKey);
+  draw();
+  document.body.append(lb);
+}
+
+// Galerie des images d'un élément + zone d'ajout
+function galleryBlock(images, { entity, entityId, onChange, dropText = 'Ajouter des images', big = false }) {
+  const wrap = el('div');
+  if (images.length) {
+    const g = el('div', 'gallery' + (big ? ' big' : ''));
+    g.innerHTML = images.map((im, i) => `<figure data-i="${i}">
+        <img loading="${big && i === 0 ? 'eager' : 'lazy'}" src="${esc(big && i === 0 ? '/images/' + im.file : imgSrc(im))}" alt="${esc(im.original_name)}"
+             onerror="if(!this.dataset.f){this.dataset.f=1;this.src='${esc(imgSrc(im))}'}">
+        <figcaption>${i === 0 ? '<span class="badge">principale</span>' : '<button type="button" class="icon" data-act="main" title="Mettre en image principale">★</button>'}
+        <button type="button" class="icon" data-act="del" title="Supprimer l'image">🗑</button></figcaption></figure>`).join('');
+    wrap.append(g);
+    if (big && images.length > 1) {
+      const strip = el('div', 'gallery');
+      strip.innerHTML = images.slice(1).map((im, j) => `<figure data-i="${j + 1}"><img loading="lazy" src="${esc(imgSrc(im))}" alt="">
+          <figcaption><button type="button" class="icon" data-act="main" title="Mettre en image principale">★</button>
+          <button type="button" class="icon" data-act="del" title="Supprimer l'image">🗑</button></figcaption></figure>`).join('');
+      wrap.append(strip);
+    }
+    wrap.addEventListener('click', async e => {
+      const fig = e.target.closest('figure');
+      if (!fig) return;
+      const im = images[+fig.dataset.i];
+      const act = e.target.closest('button')?.dataset.act;
+      if (act === 'main') { await PUT(`images/${im.id}`, { principale: true }); invalidate(); onChange(); }
+      else if (act === 'del') {
+        if (await confirmBox('Supprimer cette image ? (le fichier sera effacé)')) {
+          await DEL(`images/${im.id}`); invalidate(); onChange();
+        }
+      } else if (e.target.tagName === 'IMG') {
+        lightbox(images.map(x => ({ url: '/images/' + x.file, caption: x.original_name })), +fig.dataset.i);
+      }
+    });
+  }
+  wrap.append(dropzone(async files => { if (await uploadFiles(files, entity, entityId)) onChange(); }, dropText));
+  return wrap;
+}
+
+// ===========================================================================
+// Formulaires (modales)
+// ===========================================================================
+/* fields : [{ name, label, type, required, options, placeholder, help, wide, combo }] */
+function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', onSubmit, extra, wide }) {
+  return new Promise(resolve => {
+    const form = el('form', 'form');
+    form.noValidate = true;
+    const ctrls = {};
+    for (const f of fields) {
+      const row = el(f.type === 'combo' ? 'div' : 'label', 'field' + (f.wide ? ' wide' : ''));
+      row.innerHTML = `<span>${esc(f.label)}${f.required ? ' <b class="req">*</b>' : ''}</span>`;
+      if (f.type === 'combo') {
+        const c = f.combo(values[f.name]);
+        row.append(c.el);
+        ctrls[f.name] = { get: () => c.value, focus: () => c.focus(), c };
+      } else if (f.type === 'select') {
+        const s = el('select');
+        s.innerHTML = f.options.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+        s.value = values[f.name] ?? '';
+        row.append(s);
+        ctrls[f.name] = { get: () => s.value, focus: () => s.focus() };
+      } else {
+        const i = el(f.type === 'textarea' ? 'textarea' : 'input');
+        if (f.type !== 'textarea') i.type = f.type || 'text';
+        if (f.step) i.step = f.step;
+        if (f.type === 'number') i.inputMode = 'decimal';
+        i.placeholder = f.placeholder || '';
+        i.value = values[f.name] ?? '';
+        row.append(i);
+        ctrls[f.name] = { get: () => i.value.trim(), focus: () => i.focus() };
+      }
+      if (f.help) row.append(el('small', null, esc(f.help)));
+      form.append(row);
+    }
+    const extraApi = extra ? extra(form) : null;
+    const err = el('div', 'form-error');
+    const actions = el('div', 'actions', `<button type="button" data-cancel>Annuler</button>
+        <button type="submit" class="primary">${esc(submitLabel)}</button>`);
+    form.append(err, actions);
+    let done = false;
+    const m = openModal(title, form, { wide, onClose: () => { if (!done) resolve(null); } });
+    $('[data-cancel]', form).onclick = () => m.close();
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = {};
+      for (const [k, c] of Object.entries(ctrls)) data[k] = c.get();
+      const missing = fields.find(f => f.required && (data[f.name] === '' || data[f.name] == null));
+      if (missing) { err.textContent = `Champ obligatoire : ${missing.label}`; ctrls[missing.name].focus(); return; }
+      const btn = $('button[type=submit]', form);
+      btn.disabled = true;
+      err.textContent = '';
+      try {
+        const res = await onSubmit(data, extraApi);
+        done = true;
+        m.close();
+        resolve(res);
+      } catch (ex) {
+        err.textContent = ex.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    setTimeout(() => {
+      const first = fields.find(f => !values[f.name]) || fields[0];
+      ctrls[first.name].focus();
+    }, 30);
+  });
+}
+
+async function platformOptions() {
+  const meta = await getMeta();
+  return [{ value: '', label: '—' }, ...meta.platforms.map(p => ({ value: p.id, label: p.name }))];
+}
+
+async function openGameForm(values = {}) {
+  const isNew = !values.id;
+  return formModal({
+    title: isNew ? 'Nouveau jeu' : 'Modifier le jeu',
+    values,
+    fields: [
+      { name: 'title', label: 'Titre', required: true, wide: true, placeholder: 'Final Fantasy VII' },
+      { name: 'original_title', label: 'Titre original', wide: true, placeholder: 'ファイナルファンタジーVII' },
+      { name: 'series_id', label: 'Série', type: 'combo', combo: v => seriesCombo({ value: v }) },
+      { name: 'publisher', label: 'Éditeur', placeholder: 'Square' },
+      { name: 'year', label: 'Année de sortie', type: 'number', placeholder: '1997' },
+      { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
+    ],
+    onSubmit: async data => {
+      const g = isNew ? await POST('games', data) : await PUT(`games/${values.id}`, data);
+      invalidate();
+      toast(isNew ? `Jeu « ${g.title} » créé` : 'Jeu modifié');
+      return g;
+    },
+  });
+}
+
+async function openAdForm(values = {}, { gameText } = {}) {
+  const isNew = !values.id;
+  const platforms = await platformOptions();
+  let pending;
+  let gameCtl;
+  return formModal({
+    title: isNew ? 'Nouvelle pub' : `Modifier la pub #${values.id}`,
+    values: { pages: 1, ...values },
+    fields: [
+      {
+        name: 'game_id', label: 'Jeu', type: 'combo', required: true, wide: true,
+        combo: v => {
+          gameCtl = gameCombo({ value: v });
+          if (gameText && !v) {
+            gameCtl.input.value = gameText;
+          }
+          return gameCtl;
+        },
+        help: 'Pas encore dans la liste ? Tapez le titre puis « Nouveau jeu ».',
+      },
+      { name: 'platform_id', label: 'Plateforme', type: 'select', options: platforms },
+      { name: 'pages', label: 'Nb de pages', type: 'number', step: '0.5', help: '1, 2 (double page), 0,5…' },
+      { name: 'description', label: 'Description / visuel', wide: true, placeholder: 'Ce qui distingue cette pub : visuel, slogan…' },
+      { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
+    ],
+    extra: form => {
+      if (!isNew) return null;
+      pending = pendingImages('Image(s) de la pub');
+      const row = el('div', 'field wide');
+      row.append(pending.el);
+      form.append(row);
+      return pending;
+    },
+    onSubmit: async data => {
+      const a = isNew ? await POST('ads', data) : await PUT(`ads/${values.id}`, data);
+      if (pending && pending.files.length) await uploadFiles(pending.files, 'ads', a.id);
+      invalidate();
+      toast(isNew ? `Pub #${a.id} créée` : 'Pub modifiée');
+      return a;
+    },
+  });
+}
+
+async function openMagazineForm(values = {}) {
+  const isNew = !values.id;
+  return formModal({
+    title: isNew ? 'Nouveau magazine' : 'Modifier le magazine',
+    values,
+    fields: [
+      { name: 'name', label: 'Nom', required: true, wide: true, placeholder: 'Weekly Famitsu' },
+      { name: 'publisher', label: 'Éditeur', placeholder: 'ASCII / Enterbrain' },
+      { name: 'frequency', label: 'Périodicité', placeholder: 'Hebdomadaire, mensuel…' },
+      { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
+    ],
+    onSubmit: async data => {
+      const m = isNew ? await POST('magazines', data) : await PUT(`magazines/${values.id}`, data);
+      invalidate();
+      return m;
+    },
+  });
+}
+
+async function openIssueForm(values = {}) {
+  const isNew = !values.id;
+  return formModal({
+    title: isNew ? 'Nouveau numéro' : 'Modifier le numéro',
+    values,
+    fields: [
+      { name: 'magazine_id', label: 'Magazine', type: 'combo', required: true, wide: true, combo: v => magazineCombo({ value: v }) },
+      { name: 'number', label: 'Numéro', required: true, placeholder: '425' },
+      { name: 'date', label: 'Date de parution', placeholder: 'AAAA-MM-JJ (ou AAAA-MM)' },
+      { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
+    ],
+    onSubmit: async data => {
+      const i = isNew ? await POST('issues', data) : await PUT(`issues/${values.id}`, data);
+      invalidate();
+      return i;
+    },
+  });
+}
+
+async function openAppearanceForm(values = {}) {
+  const isNew = !values.id;
+  let pending;
+  return formModal({
+    title: isNew ? 'Nouvelle parution' : 'Modifier la parution',
+    values: { ...values, issue_number: values.number || '', for_sale: values.for_sale ? '1' : '0' },
+    fields: [
+      { name: 'magazine_id', label: 'Magazine', type: 'combo', required: true, combo: v => magazineCombo({ value: v }) },
+      { name: 'issue_number', label: 'Numéro', required: true, placeholder: '425' },
+      { name: 'ad_id', label: 'Pub', type: 'combo', required: true, wide: true, combo: v => adCombo({ value: v }) },
+      { name: 'page', label: 'Page', placeholder: '12, 表4…' },
+      { name: 'for_sale', label: 'En vente', type: 'select', options: [{ value: '0', label: `${BATSU} Non` }, { value: '1', label: `${MARU} Oui` }] },
+      { name: 'notes', label: 'Remarques', type: 'textarea', wide: true, placeholder: 'État, prix, scan fait…' },
+    ],
+    extra: form => {
+      const row = el('div', 'field wide');
+      row.innerHTML = '<span>Photo de cet exemplaire (facultatif)</span>';
+      if (isNew) {
+        pending = pendingImages('Image(s) de cet exemplaire');
+        row.append(pending.el);
+      } else {
+        const holder = el('div');
+        const draw = async () => {
+          const d = await GET(`appearances/${values.id}`);
+          holder.replaceChildren(galleryBlock(d.images, { entity: 'appearances', entityId: values.id, onChange: draw, dropText: 'Ajouter une photo' }));
+        };
+        draw();
+        row.append(holder);
+      }
+      form.append(row);
+    },
+    onSubmit: async data => {
+      const a = isNew ? await POST('appearances', data) : await PUT(`appearances/${values.id}`, data);
+      if (pending && pending.files.length) await uploadFiles(pending.files, 'appearances', a.id);
+      invalidate();
+      toast(isNew ? 'Parution ajoutée' : 'Parution modifiée');
+      return a;
+    },
+  });
+}
+
+// ===========================================================================
+// Tableau des parutions (réutilisé partout)
+// ===========================================================================
+function appTable(items, { hide = [], onChange = () => {}, emptyText = 'Aucune parution.' } = {}) {
+  const wrap = el('div', 'table-wrap');
+  if (!items.length) { wrap.innerHTML = `<p class="empty">${esc(emptyText)}</p>`; return wrap; }
+  const show = c => !hide.includes(c);
+  wrap.innerHTML = `<table class="data"><thead><tr><th></th>
+      ${show('issue') ? '<th>Magazine / n°</th><th>Date</th>' : ''}
+      <th>Page</th>${show('game') ? '<th>Jeu</th>' : ''}${show('ad') ? '<th>Pub</th>' : ''}
+      ${show('platform') ? '<th>Plateforme</th>' : ''}<th title="En vente">Vente</th><th>Remarques</th><th></th></tr></thead>
+    <tbody>${items.map((r, i) => `<tr data-i="${i}">
+      <td class="thumb">${thumbImg(r.thumb_url)}</td>
+      ${show('issue') ? `<td><a href="#/numeros/${r.issue_id}">${esc(r.magazine)} <b>n°${esc(r.number)}</b></a></td>
+        <td class="nowrap">${esc(r.date || '—')}</td>` : ''}
+      <td class="nowrap">${esc(r.page)}</td>
+      ${show('game') ? `<td><a href="#/jeux/${r.game_id}">${esc(r.game)}</a></td>` : ''}
+      ${show('ad') ? `<td><a href="#/pubs/${r.ad_id}">#${r.ad_id}</a> <span class="muted">${esc(r.description || '')}</span></td>` : ''}
+      ${show('platform') ? `<td>${esc(r.platform || '')}</td>` : ''}
+      <td>${saleBtn(r.for_sale)}</td>
+      <td class="notes">${esc(r.notes)}</td>
+      <td class="row-actions"><button type="button" class="icon" data-act="edit" title="Modifier">✎</button>
+        <button type="button" class="icon" data-act="del" title="Supprimer">🗑</button></td></tr>`).join('')}</tbody></table>`;
+  wrap.addEventListener('click', async e => {
+    const tr = e.target.closest('tr[data-i]');
+    if (!tr) return;
+    const r = items[+tr.dataset.i];
+    if (e.target.classList.contains('thumb-img')) return openThumb(r);
+    const act = e.target.closest('button')?.dataset.act;
+    if (act === 'sale') {
+      const v = r.for_sale ? 0 : 1;
+      await PUT(`appearances/${r.id}`, { for_sale: v });
+      r.for_sale = v;
+      e.target.closest('button').outerHTML = saleBtn(v);
+      invalidate();
+      onChange('sale');
+    } else if (act === 'edit') {
+      if (await openAppearanceForm(r)) onChange();
+    } else if (act === 'del') {
+      if (await confirmBox(`Supprimer la parution de « ${r.game} » dans ${r.magazine} n°${r.number} p.${r.page} ?`)) {
+        await DEL(`appearances/${r.id}`);
+        invalidate();
+        toast('Parution supprimée');
+        onChange();
+      }
+    }
+  });
+  return wrap;
+}
+
+// Clic sur une miniature de tableau : images d'origine de l'exemplaire puis de la pub
+async function openThumb(r) {
+  const [d, ad] = await Promise.all([GET(`appearances/${r.id}`), GET(`ads/${r.ad_id}`)]);
+  const list = [...d.images, ...ad.images].map(im => ({ url: '/images/' + im.file, caption: im.original_name }));
+  lightbox(list, 0);
+}
+
+function adCard(a) {
+  return `<a class="ad-card" href="#/pubs/${a.id}">
+    <div class="img">${a.thumb_url ? `<img loading="lazy" src="${esc(a.thumb_url)}" alt="">` : '<div class="none">Pas encore d\'image</div>'}</div>
+    <div class="body"><div class="t">${esc(a.game_title)}</div>
+      <div class="d">${esc(a.description || '—')}</div>
+      <div class="meta"><span>#${a.id} · ${esc(a.platform_name || '')}</span><span>${plural(a.app_count, 'parution')}</span></div>
+    </div></a>`;
+}
+
+// ===========================================================================
+// Pages
+// ===========================================================================
+async function pageHome(view) {
+  const d = await GET('dashboard');
+  const c = d.counts;
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Accueil</h1><div class="sub">Base de référencement des pubs de jeux vidéo dans les magazines</div></div>
+      <div class="btns"><a class="btn primary big" href="#/saisie">＋ Saisie rapide</a></div></div>
+    ${c.games === 0 ? `<div class="card welcome" style="margin-bottom:16px"><h2>Bienvenue !</h2>
+      La base est vide. Le plus simple est de passer directement par la <a href="#/saisie">saisie rapide</a> :
+      <ol><li>Choisir le magazine et taper le numéro (ils sont créés au passage).</li>
+      <li>Taper la page, puis chercher la pub : si elle n'existe pas, « Nouvelle pub » (et « Nouveau jeu » si besoin).</li>
+      <li>Ajouter une photo ou un scan de la pub (glisser-déposer ou Ctrl+V).</li>
+      <li>Enregistrer, puis passer à la pub suivante du même numéro.</li></ol></div>` : ''}
+    <div class="tiles">
+      <a class="tile" href="#/recherche"><div class="n">${c.appearances}</div><div class="l">parutions référencées</div></a>
+      <a class="tile" href="#/pubs"><div class="n">${c.ads}</div><div class="l">pubs différentes</div></a>
+      <a class="tile" href="#/jeux"><div class="n">${c.games}</div><div class="l">jeux</div></a>
+      <a class="tile" href="#/magazines"><div class="n">${c.issues}</div><div class="l">numéros · ${plural(c.magazines, 'magazine')}</div></a>
+      <a class="tile" href="#/recherche?vente=1"><div class="n">${c.for_sale}</div><div class="l">en vente ${MARU}</div></a>
+      <div class="tile"><div class="n">${c.week}</div><div class="l">saisies ces 7 derniers jours</div></div>
+    </div>
+    ${c.ads_without_image ? `<div class="notice">${plural(c.ads_without_image, 'pub n\'a', 'pubs n\'ont')} pas encore d'image.
+      <a href="#/pubs?sans_image=1">Les voir</a></div>` : ''}
+    <div class="grid-2 home">
+      <div class="card"><h2>Dernières saisies</h2><div id="recent"></div></div>
+      <div>
+        <div class="card"><h2>Jeux les plus présents</h2>
+          ${d.top_games.length ? `<ul class="rank">${d.top_games.map(g => `<li><a href="#/jeux/${g.id}">${esc(g.title)}</a>
+            <span class="muted">${plural(g.n, 'parution')} · ${plural(g.ads, 'pub')}</span></li>`).join('')}</ul>` : '<p class="empty">—</p>'}</div>
+        <div class="card"><h2>Magazines</h2>
+          ${d.top_magazines.length ? `<ul class="rank">${d.top_magazines.map(m => `<li><a href="#/magazines/${m.id}">${esc(m.name)}</a>
+            <span class="muted">${plural(m.n, 'parution')} · ${plural(m.issues, 'numéro')}</span></li>`).join('')}</ul>` : '<p class="empty">—</p>'}</div>
+      </div>
+    </div>`;
+  $('#recent', view).append(appTable(d.recent, { hide: ['platform'], onChange: () => render(), emptyText: 'Rien pour l\'instant.' }));
+}
+
+// ---------------------------------------------------------------------------
+async function pageEntry(view, params) {
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Saisie rapide</h1>
+      <div class="sub">Un numéro de magazine, puis les pubs qu'il contient, l'une après l'autre.</div></div></div>
+    <div class="grid-entry">
+      <form class="card" id="entry" autocomplete="off">
+        <div class="step"><span class="num">1</span><h2>Numéro</h2></div>
+        <div class="form">
+          <div class="field wide"><span>Magazine <b class="req">*</b></span><div id="f-mag"></div></div>
+          <label class="field"><span>Numéro <b class="req">*</b></span><input id="f-num" placeholder="425"></label>
+          <label class="field"><span>Date de parution</span><input id="f-date" placeholder="AAAA-MM-JJ"></label>
+        </div>
+        <div class="issue-status" id="issue-status"></div>
+        <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+        <div class="step"><span class="num">2</span><h2>Pub trouvée</h2></div>
+        <div class="form">
+          <div class="field wide"><span>Pub <b class="req">*</b></span><div id="f-ad"></div>
+            <small>Tapez le nom du jeu ou le n° de pub. Si elle n'existe pas : « Nouvelle pub ».</small></div>
+          <div class="wide" id="ad-preview"></div>
+          <label class="field"><span>Page</span><input id="f-page" placeholder="12, 表4…"></label>
+          <div class="field"><span>En vente</span>
+            <div class="toggle-sale">
+              <label class="no"><input type="radio" name="sale" value="0" checked>${BATSU} Non</label>
+              <label class="yes"><input type="radio" name="sale" value="1">${MARU} Oui</label>
+            </div></div>
+          <label class="field wide"><span>Remarques</span><input id="f-notes" placeholder="État, prix, scan fait…"></label>
+          <div class="field wide"><span>Image</span><div id="f-img"></div>
+            <label class="muted" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px">Associer à :
+              <select id="f-img-target" style="width:auto;max-width:100%"><option value="ads">la pub (visuel commun à toutes ses parutions)</option>
+              <option value="appearances">cet exemplaire seulement</option></select></label></div>
+          <div class="form-error" id="f-err"></div>
+          <div class="actions"><span class="kbd" style="margin-right:auto;align-self:center"><kbd>Entrée</kbd> ou <kbd>Ctrl</kbd>+<kbd>Entrée</kbd> pour enregistrer</span>
+            <button type="submit" class="primary big">Enregistrer</button></div>
+        </div>
+      </form>
+      <div>
+        <div class="card"><div class="page-head" style="margin-bottom:8px"><h2 id="in-issue-title">Dans ce numéro</h2>
+          <div class="btns" id="in-issue-links"></div></div><div id="in-issue"><p class="empty">Choisissez un magazine et un numéro.</p></div></div>
+        <div class="card" id="cover-card" hidden><h2>Couverture</h2><div id="cover"></div></div>
+      </div>
+    </div>`;
+
+  const form = $('#entry', view);
+  const numI = $('#f-num', view), dateI = $('#f-date', view), pageI = $('#f-page', view), notesI = $('#f-notes', view);
+  const status = $('#issue-status', view), err = $('#f-err', view);
+  const targetSel = $('#f-img-target', view);
+  let issue = null; // numéro existant correspondant (ou null)
+
+  const mag = magazineCombo({ onChange: () => refreshIssue() });
+  $('#f-mag', view).append(mag.el);
+  const ad = adCombo({ onChange: a => showAd(a) });
+  $('#f-ad', view).append(ad.el);
+  const pending = pendingImages('Photo / scan de la pub');
+  $('#f-img', view).append(pending.el);
+
+  function showAd(a) {
+    const box = $('#ad-preview', view);
+    if (!a) { box.innerHTML = ''; return; }
+    targetSel.value = a.img_count ? 'appearances' : 'ads';
+    const dup = lastItems.filter(r => r.ad_id === a.id);
+    box.innerHTML = `<div class="ad-preview">${a.thumb_url ? `<img src="${esc(a.thumb_url)}" alt="">` : '<div class="thumb-none">▢</div>'}
+      <div><b>${esc(a.game_title)}</b> <span class="muted">${esc(a.platform_name || '')}</span><br>
+      ${esc(a.description || '')}<br>
+      <small>Pub #${a.id} · ${fmtPages(a.pages) || '?'} p. · déjà vue ${plural(a.app_count, 'fois', 'fois')}${a.img_count ? '' : ' · <b>pas encore d\'image</b>'}</small>
+      ${dup.length ? `<div class="warn">Déjà saisie dans ce numéro (p. ${dup.map(r => esc(r.page) || '?').join(', ')})</div>` : ''}
+      <div style="margin-top:4px"><a href="#/pubs/${a.id}" target="_blank" tabindex="-1">ouvrir la fiche ↗</a></div></div></div>`;
+  }
+
+  let lastItems = [];
+  let reqId = 0;
+  async function refreshIssue() {
+    const id = ++reqId;
+    const m = mag.item, num = numI.value.trim();
+    issue = null;
+    if (!m || !num) {
+      status.textContent = '';
+      $('#in-issue', view).innerHTML = '<p class="empty">Choisissez un magazine et un numéro.</p>';
+      $('#in-issue-title', view).textContent = 'Dans ce numéro';
+      $('#in-issue-links', view).innerHTML = '';
+      $('#cover-card', view).hidden = true;
+      lastItems = [];
+      return;
+    }
+    try { localStorage.setItem('bddpubs.saisie', JSON.stringify({ magazine_id: m.id, number: num })); } catch (_) { /* ignoré */ }
+    const found = await GET(`issues?${qs({ magazine_id: m.id, number: num })}`);
+    if (id !== reqId) return;
+    $('#in-issue-title', view).textContent = `${m.name} n°${num}`;
+    if (found.length) {
+      issue = await GET(`issues/${found[0].id}`);
+      if (id !== reqId) return;
+      if (!dateI.value && issue.date) dateI.value = issue.date;
+      status.innerHTML = `<span class="badge gray">numéro existant</span> ${issue.date ? 'paru le ' + esc(issue.date) + ' · ' : ''}${plural(issue.app_count, 'pub référencée', 'pubs référencées')}`;
+      lastItems = issue.appearances;
+      $('#in-issue-links', view).innerHTML = `<a class="btn" href="#/numeros/${issue.id}">Fiche du numéro</a>`;
+      const inIssue = $('#in-issue', view);
+      inIssue.replaceChildren(appTable(issue.appearances, { hide: ['issue', 'platform'], onChange: () => refreshIssue(), emptyText: 'Aucune pub saisie pour l\'instant.' }));
+      $('#cover-card', view).hidden = false;
+      $('#cover', view).replaceChildren(galleryBlock(issue.images, { entity: 'issues', entityId: issue.id, onChange: refreshIssue, dropText: 'Ajouter la couverture' }));
+    } else {
+      status.innerHTML = '<span class="badge">nouveau numéro</span> il sera créé au premier enregistrement';
+      lastItems = [];
+      $('#in-issue-links', view).innerHTML = '';
+      $('#in-issue', view).innerHTML = '<p class="empty">Aucune pub saisie pour l\'instant.</p>';
+      $('#cover-card', view).hidden = true;
+    }
+    if (ad.item) showAd(ad.item);
+  }
+  numI.addEventListener('input', debounce(refreshIssue, 350));
+
+  async function save() {
+    err.textContent = '';
+    if (!mag.value) { err.textContent = 'Choisissez un magazine.'; mag.focus(); return; }
+    if (!numI.value.trim()) { err.textContent = 'Indiquez le numéro.'; numI.focus(); return; }
+    if (!ad.value) { err.textContent = 'Choisissez (ou créez) la pub.'; ad.focus(); return; }
+    const btn = $('button[type=submit]', form);
+    btn.disabled = true;
+    try {
+      const saleVal = $('input[name=sale]:checked', form).value;
+      const a = await POST('appearances', {
+        magazine_id: mag.value, issue_number: numI.value.trim(), issue_date: dateI.value.trim(),
+        ad_id: ad.value, page: pageI.value.trim(), for_sale: saleVal, notes: notesI.value.trim(),
+      });
+      if (pending.files.length) {
+        const target = targetSel.value;
+        await uploadFiles(pending.files, target, target === 'ads' ? a.ad_id : a.id);
+      }
+      invalidate();
+      toast(`Enregistré : ${a.game} ${a.page ? 'p.' + a.page : ''}`);
+      pageI.value = '';
+      notesI.value = '';
+      pending.clear();
+      ad.clear();
+      $('input[name=sale][value="0"]', form).checked = true;
+      await refreshIssue();
+      ad.focus();
+    } catch (e) {
+      err.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  form.addEventListener('submit', e => { e.preventDefault(); save(); });
+  form.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+  });
+
+  // Reprise : numéro passé dans l'adresse, sinon le dernier utilisé
+  let start = null;
+  if (params.issue) {
+    const i = await GET(`issues/${params.issue}`);
+    start = { magazine_id: i.magazine_id, number: i.number };
+  } else {
+    try { start = JSON.parse(localStorage.getItem('bddpubs.saisie') || 'null'); } catch (_) { start = null; }
+  }
+  if (start) {
+    await mag.set(start.magazine_id, true);
+    if (mag.value) { numI.value = start.number; await refreshIssue(); }
+  }
+  setTimeout(() => (mag.value && numI.value ? ad.input : mag.input).focus(), 50);
+}
+
+// ---------------------------------------------------------------------------
+async function pageSearch(view, params) {
+  const meta = await getMeta();
+  const opt = (list, lbl = x => x.name) => '<option value="">Tous</option>' + list.map(x => `<option value="${x.id}">${esc(lbl(x))}</option>`).join('');
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Recherche</h1><div class="sub">Tous les critères remplis doivent être vrais. Critère vide = ignoré.</div></div>
+      <div class="btns"><button type="button" id="reset">Réinitialiser</button><a class="btn" id="export">⬇ Export CSV</a></div></div>
+    <form class="card filters" id="filters" autocomplete="off">
+      <label class="field"><span>Magazine</span><select name="magazine_id">${opt(meta.magazines)}</select></label>
+      <label class="field"><span>Numéro</span><input name="numero" placeholder="425"></label>
+      <label class="field"><span>Année de parution</span><input name="annee" placeholder="1997" inputmode="numeric"></label>
+      <label class="field"><span>Jeu (contient)</span><input name="jeu" placeholder="final fantasy"></label>
+      <label class="field"><span>Série</span><select name="series_id">${opt(meta.series)}</select></label>
+      <label class="field"><span>Plateforme</span><select name="platform_id">${opt(meta.platforms)}</select></label>
+      <label class="field"><span>N° de pub</span><input name="ad_id" placeholder="12"></label>
+      <label class="field"><span>En vente</span><select name="vente"><option value="">Tous</option><option value="1">${MARU} Oui</option><option value="0">${BATSU} Non</option></select></label>
+      <label class="field"><span>Mot-clé (description, remarques)</span><input name="q"></label>
+      <label class="field"><span>Trier par</span><select name="tri"><option value="">Magazine puis numéro</option>
+        <option value="date">Date de parution</option><option value="jeu">Jeu</option><option value="recent">Dernières saisies</option></select></label>
+    </form>
+    <div class="statbar" id="stats"></div>
+    <div class="card"><div id="results"></div><div class="more" id="more"></div></div>`;
+  const form = $('#filters', view);
+  for (const [k, v] of Object.entries(params)) if (form.elements[k]) form.elements[k].value = v;
+  const LIMIT = 200;
+  let offset = 0, items = [];
+
+  const current = () => {
+    const o = {};
+    for (const e of form.elements) if (e.name) o[e.name] = e.value.trim();
+    return o;
+  };
+  async function run(append = false) {
+    const f = current();
+    history.replaceState(null, '', '#/recherche' + (qs(f) ? '?' + qs(f) : ''));
+    $('#export', view).href = '/api/export/apparitions.csv?' + qs(f);
+    if (!append) { offset = 0; items = []; }
+    const res = await GET('search?' + qs({ ...f, limit: LIMIT, offset }));
+    items = items.concat(res.items);
+    offset += res.items.length;
+    const s = res.stats;
+    $('#stats', view).innerHTML = `<span><b>${s.total}</b> parution${s.total > 1 ? 's' : ''}</span>
+      <span><b>${s.ads}</b> pub${s.ads > 1 ? 's' : ''} différente${s.ads > 1 ? 's' : ''}</span>
+      <span><b>${s.games}</b> jeu${s.games > 1 ? 'x' : ''}</span>
+      <span><b>${s.issues}</b> numéro${s.issues > 1 ? 's' : ''} (${plural(s.magazines, 'magazine')})</span>
+      <span><b>${s.for_sale}</b> en vente ${MARU}</span>
+      <span><b>${fmtPages(s.pages)}</b> page${s.pages > 1 ? 's' : ''} de pub</span>`;
+    $('#results', view).replaceChildren(appTable(items, { onChange: kind => { if (kind !== 'sale') run(); }, emptyText: 'Aucun résultat.' }));
+    $('#more', view).innerHTML = offset < s.total ? `<button type="button">Afficher plus (${s.total - offset} restants)</button>` : '';
+  }
+  $('#more', view).addEventListener('click', e => { if (e.target.closest('button')) run(true); });
+  form.addEventListener('input', debounce(() => run(), 300));
+  form.addEventListener('change', () => run());
+  form.addEventListener('submit', e => { e.preventDefault(); run(); });
+  $('#reset', view).onclick = () => { form.reset(); run(); };
+  await run();
+}
+
+// ---------------------------------------------------------------------------
+async function pageAds(view, params) {
+  const meta = await getMeta();
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Pubs</h1><div class="sub">Chaque visuel publicitaire distinct. Un jeu peut en avoir plusieurs.</div></div>
+      <div class="btns"><button type="button" class="primary" id="new">＋ Nouvelle pub</button></div></div>
+    <div class="toolbar" id="tb">
+      <input type="search" name="q" placeholder="Rechercher : jeu, description, n°…">
+      <select name="platform_id"><option value="">Toutes plateformes</option>${meta.platforms.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+      <select name="series_id"><option value="">Toutes séries</option>${meta.series.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+      <select name="tri"><option value="">Tri : jeu</option><option value="recent">Tri : dernières créées</option></select>
+      <label class="check"><input type="checkbox" name="sans_image" value="1"> sans image</label>
+      <span class="muted" id="count"></span>
+    </div>
+    <div class="cards" id="cards"></div>`;
+  const tb = $('#tb', view);
+  for (const [k, v] of Object.entries(params)) {
+    const e = tb.querySelector(`[name="${k}"]`);
+    if (e) { if (e.type === 'checkbox') e.checked = v === '1'; else e.value = v; }
+  }
+  const current = () => {
+    const o = {};
+    $$('[name]', tb).forEach(e => { o[e.name] = e.type === 'checkbox' ? (e.checked ? '1' : '') : e.value.trim(); });
+    return o;
+  };
+  async function load() {
+    const f = current();
+    history.replaceState(null, '', '#/pubs' + (qs(f) ? '?' + qs(f) : ''));
+    const list = await GET('ads?' + qs(f));
+    $('#count', view).textContent = plural(list.length, 'pub');
+    $('#cards', view).innerHTML = list.length ? list.map(adCard).join('') : '<p class="empty">Aucune pub.</p>';
+  }
+  tb.addEventListener('input', debounce(load, 250));
+  tb.addEventListener('change', load);
+  $('#new', view).onclick = async () => { const a = await openAdForm(); if (a) location.hash = `#/pubs/${a.id}`; };
+  await load();
+}
+
+async function pageAd(view, params, id) {
+  async function load() {
+    const a = await GET(`ads/${id}`);
+    view.innerHTML = `
+      <div class="page-head"><div><div class="crumbs"><a href="#/pubs">Pubs</a> › #${a.id}</div>
+        <h1><a href="#/jeux/${a.game_id}">${esc(a.game_title)}</a> <span class="muted">· ${esc(a.platform_name || 'plateforme ?')}</span></h1>
+        <div class="sub">${esc(a.description || 'Sans description')}</div></div>
+        <div class="btns"><button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
+      <div class="grid-detail">
+        <div class="card"><h2>Images</h2><div id="imgs"></div></div>
+        <div>
+          <div class="card"><dl class="info">
+            <dt>N° de pub</dt><dd><b>#${a.id}</b></dd>
+            <dt>Jeu</dt><dd><a href="#/jeux/${a.game_id}">${esc(a.game_title)}</a> ${a.original_title ? `<span class="muted">${esc(a.original_title)}</span>` : ''}</dd>
+            <dt>Série</dt><dd>${esc(a.series_name || '—')}</dd>
+            <dt>Plateforme</dt><dd>${esc(a.platform_name || '—')}</dd>
+            <dt>Nb de pages</dt><dd>${fmtPages(a.pages) || '—'}</dd>
+            <dt>1re parution</dt><dd>${esc(a.first_date || '—')}</dd>
+            <dt>Parutions</dt><dd>${a.app_count} (dont ${a.sale_count} en vente)</dd>
+            ${a.notes ? `<dt>Remarques</dt><dd>${esc(a.notes)}</dd>` : ''}
+          </dl></div>
+          <div class="card"><div class="page-head" style="margin-bottom:8px"><h2>Où trouver cette pub</h2>
+            <button type="button" class="primary" id="add-app">＋ Ajouter une parution</button></div><div id="apps"></div></div>
+        </div>
+      </div>`;
+    $('#imgs', view).append(galleryBlock(a.images, { entity: 'ads', entityId: a.id, onChange: load, big: true, dropText: 'Ajouter des images de la pub' }));
+    $('#apps', view).append(appTable(a.appearances, { hide: ['game', 'ad', 'platform'], onChange: load, emptyText: 'Pas encore repérée dans un magazine.' }));
+    $('#edit', view).onclick = async () => { if (await openAdForm(a)) load(); };
+    $('#add-app', view).onclick = async () => { if (await openAppearanceForm({ ad_id: a.id })) load(); };
+    $('#del', view).onclick = async () => {
+      if (!await confirmBox(`Supprimer la pub #${a.id} et ses images ?`)) return;
+      await DEL(`ads/${a.id}`);
+      invalidate();
+      toast('Pub supprimée');
+      location.hash = `#/jeux/${a.game_id}`;
+    };
+  }
+  await load();
+}
+
+// ---------------------------------------------------------------------------
+async function pageGames(view, params) {
+  const meta = await getMeta();
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Jeux</h1></div>
+      <div class="btns"><button type="button" class="primary" id="new">＋ Nouveau jeu</button></div></div>
+    <div class="toolbar" id="tb">
+      <input type="search" name="q" placeholder="Titre, titre original, éditeur…">
+      <select name="series_id"><option value="">Toutes séries</option>${meta.series.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+      <span class="muted" id="count"></span>
+    </div>
+    <div class="card"><div class="table-wrap" id="list"></div></div>`;
+  const tb = $('#tb', view);
+  for (const [k, v] of Object.entries(params)) { const e = tb.querySelector(`[name="${k}"]`); if (e) e.value = v; }
+  let sortKey = 'title', sortDir = 1, list = [];
+  function draw() {
+    const cols = [['title', 'Titre'], ['series_name', 'Série'], ['publisher', 'Éditeur'], ['year', 'Année', 'num'],
+      ['ads_count', 'Pubs', 'num'], ['app_count', 'Parutions', 'num'], ['sale_count', 'En vente', 'num'], ['first_date', '1re parution']];
+    const sorted = [...list].sort((a, b) => {
+      const x = a[sortKey] ?? '', y = b[sortKey] ?? '';
+      return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'fr', { numeric: true })) * sortDir;
+    });
+    $('#list', view).innerHTML = list.length ? `<table class="data"><thead><tr><th></th>${cols.map(([k, l, c]) =>
+      `<th class="${c || ''}" data-k="${k}" style="cursor:pointer">${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
+      <tbody>${sorted.map(g => `<tr class="clickable" data-id="${g.id}"><td class="thumb">${thumbImg(g.thumb_url)}</td>
+        <td><b>${esc(g.title)}</b><div class="muted">${esc(g.original_title)}</div></td><td>${esc(g.series_name || '')}</td>
+        <td>${esc(g.publisher)}</td><td class="num">${g.year ?? ''}</td><td class="num">${g.ads_count}</td>
+        <td class="num">${g.app_count}</td><td class="num">${g.sale_count}</td><td>${esc(g.first_date || '')}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="empty">Aucun jeu.</p>';
+  }
+  $('#list', view).addEventListener('click', e => {
+    const th = e.target.closest('th[data-k]');
+    if (th) { sortDir = th.dataset.k === sortKey ? -sortDir : 1; sortKey = th.dataset.k; return draw(); }
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) location.hash = `#/jeux/${tr.dataset.id}`;
+  });
+  async function load() {
+    const f = { q: $('[name=q]', tb).value.trim(), series_id: $('[name=series_id]', tb).value };
+    history.replaceState(null, '', '#/jeux' + (qs(f) ? '?' + qs(f) : ''));
+    list = await GET('games?' + qs(f));
+    $('#count', view).textContent = plural(list.length, 'jeu', 'jeux');
+    draw();
+  }
+  tb.addEventListener('input', debounce(load, 250));
+  tb.addEventListener('change', load);
+  $('#new', view).onclick = async () => { const g = await openGameForm(); if (g) location.hash = `#/jeux/${g.id}`; };
+  await load();
+}
+
+async function pageGame(view, params, id) {
+  async function load() {
+    const g = await GET(`games/${id}`);
+    view.innerHTML = `
+      <div class="page-head"><div><div class="crumbs"><a href="#/jeux">Jeux</a></div>
+        <h1>${esc(g.title)}</h1><div class="sub">${esc([g.original_title, g.series_name && 'série ' + g.series_name, g.publisher, g.year].filter(Boolean).join(' · '))}</div></div>
+        <div class="btns"><button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
+      <div class="tiles">
+        <div class="tile"><div class="n">${g.ads_count}</div><div class="l">pub${g.ads_count > 1 ? 's' : ''} différente${g.ads_count > 1 ? 's' : ''}</div></div>
+        <div class="tile"><div class="n">${g.app_count}</div><div class="l">parution${g.app_count > 1 ? 's' : ''}</div></div>
+        <div class="tile"><div class="n">${new Set(g.appearances.map(r => r.magazine_id)).size}</div><div class="l">magazine(s)</div></div>
+        <div class="tile"><div class="n">${g.sale_count}</div><div class="l">en vente ${MARU}</div></div>
+        <div class="tile"><div class="n" style="font-size:18px">${esc(g.first_date || '—')}</div><div class="l">1re parution</div></div>
+      </div>
+      ${g.notes ? `<div class="card">${esc(g.notes)}</div>` : ''}
+      <div class="card"><div class="page-head" style="margin-bottom:8px"><h2>Pubs de ce jeu</h2>
+        <button type="button" class="primary" id="new-ad">＋ Nouvelle pub pour ce jeu</button></div>
+        <div class="cards">${g.ads.length ? g.ads.map(adCard).join('') : '<p class="empty">Aucune pub pour l\'instant.</p>'}</div></div>
+      <div class="card"><h2>Toutes les parutions</h2><div id="apps"></div></div>`;
+    $('#apps', view).append(appTable(g.appearances, { hide: ['game'], onChange: load, emptyText: 'Pas encore repéré dans un magazine.' }));
+    $('#edit', view).onclick = async () => { if (await openGameForm(g)) load(); };
+    $('#new-ad', view).onclick = async () => { const a = await openAdForm({ game_id: g.id }); if (a) load(); };
+    $('#del', view).onclick = async () => {
+      if (!await confirmBox(`Supprimer le jeu « ${g.title} » ?`)) return;
+      await DEL(`games/${g.id}`);
+      invalidate();
+      toast('Jeu supprimé');
+      location.hash = '#/jeux';
+    };
+  }
+  await load();
+}
+
+// ---------------------------------------------------------------------------
+async function pageMagazines(view) {
+  const list = await GET('magazines');
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Magazines</h1></div>
+      <div class="btns"><button type="button" class="primary" id="new">＋ Nouveau magazine</button></div></div>
+    <div class="card"><div class="table-wrap">${list.length ? `<table class="data"><thead><tr><th>Magazine</th><th>Éditeur</th><th>Périodicité</th>
+      <th class="num">Numéros</th><th class="num">Parutions</th><th class="num">En vente</th><th>Période</th></tr></thead>
+      <tbody>${list.map(m => `<tr class="clickable" data-id="${m.id}"><td><b>${esc(m.name)}</b></td><td>${esc(m.publisher)}</td>
+        <td>${esc(m.frequency)}</td><td class="num">${m.issues_count}</td><td class="num">${m.app_count}</td><td class="num">${m.sale_count}</td>
+        <td class="muted">${m.first_date ? esc(m.first_date) + ' → ' + esc(m.last_date) : ''}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="empty">Aucun magazine. Ils peuvent aussi être créés directement depuis la saisie rapide.</p>'}</div></div>`;
+  view.addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = `#/magazines/${tr.dataset.id}`; });
+  $('#new', view).onclick = async () => { const m = await openMagazineForm(); if (m) location.hash = `#/magazines/${m.id}`; };
+}
+
+async function pageMagazine(view, params, id) {
+  async function load() {
+    const m = await GET(`magazines/${id}`);
+    view.innerHTML = `
+      <div class="page-head"><div><div class="crumbs"><a href="#/magazines">Magazines</a></div><h1>${esc(m.name)}</h1>
+        <div class="sub">${esc([m.publisher, m.frequency].filter(Boolean).join(' · '))}</div></div>
+        <div class="btns"><a class="btn" href="#/recherche?magazine_id=${m.id}">Toutes ses pubs</a>
+          <button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
+      <div class="tiles">
+        <div class="tile"><div class="n">${m.issues_count}</div><div class="l">numéros répertoriés</div></div>
+        <div class="tile"><div class="n">${m.app_count}</div><div class="l">parutions de pubs</div></div>
+        <div class="tile"><div class="n">${m.sale_count}</div><div class="l">en vente ${MARU}</div></div>
+      </div>
+      ${m.notes ? `<div class="card">${esc(m.notes)}</div>` : ''}
+      <div class="card"><div class="page-head" style="margin-bottom:8px"><h2>Numéros</h2>
+        <button type="button" class="primary" id="new-issue">＋ Nouveau numéro</button></div>
+        <div class="table-wrap">${m.issues.length ? `<table class="data"><thead><tr><th></th><th>Numéro</th><th>Date</th>
+          <th class="num">Pubs</th><th class="num">En vente</th><th>Remarques</th></tr></thead>
+          <tbody>${m.issues.map(i => `<tr class="clickable" data-id="${i.id}"><td class="thumb">${thumbImg(i.thumb_url)}</td>
+            <td><b>n°${esc(i.number)}</b></td><td>${esc(i.date || '—')}</td><td class="num">${i.app_count}</td>
+            <td class="num">${i.sale_count}</td><td class="notes">${esc(i.notes)}</td></tr>`).join('')}</tbody></table>`
+          : '<p class="empty">Aucun numéro.</p>'}</div></div>`;
+    $('.card .table-wrap', view)?.addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = `#/numeros/${tr.dataset.id}`; });
+    $('#edit', view).onclick = async () => { if (await openMagazineForm(m)) load(); };
+    $('#new-issue', view).onclick = async () => { const i = await openIssueForm({ magazine_id: m.id }); if (i) location.hash = `#/numeros/${i.id}`; };
+    $('#del', view).onclick = async () => {
+      if (!await confirmBox(`Supprimer le magazine « ${m.name} » ?`)) return;
+      await DEL(`magazines/${m.id}`);
+      invalidate();
+      location.hash = '#/magazines';
+    };
+  }
+  await load();
+}
+
+async function pageIssue(view, params, id) {
+  async function load() {
+    const i = await GET(`issues/${id}`);
+    view.innerHTML = `
+      <div class="page-head"><div><div class="crumbs"><a href="#/magazines">Magazines</a> › <a href="#/magazines/${i.magazine_id}">${esc(i.magazine_name)}</a></div>
+        <h1>${esc(i.magazine_name)} n°${esc(i.number)}</h1><div class="sub">${i.date ? 'Paru le ' + esc(i.date) : 'Date inconnue'}
+        · ${plural(i.app_count, 'pub référencée', 'pubs référencées')}</div></div>
+        <div class="btns"><a class="btn primary" href="#/saisie?issue=${i.id}">＋ Saisir des pubs dans ce numéro</a>
+          <button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
+      <div class="grid-detail">
+        <div class="card"><h2>Couverture</h2><div id="imgs"></div></div>
+        <div class="card"><h2>Pubs dans ce numéro</h2><div id="apps"></div></div>
+      </div>`;
+    $('#imgs', view).append(galleryBlock(i.images, { entity: 'issues', entityId: i.id, onChange: load, big: true, dropText: 'Ajouter la couverture' }));
+    $('#apps', view).append(appTable(i.appearances, { hide: ['issue'], onChange: load, emptyText: 'Aucune pub saisie.' }));
+    $('#edit', view).onclick = async () => { if (await openIssueForm(i)) load(); };
+    $('#del', view).onclick = async () => {
+      if (!await confirmBox(`Supprimer ${i.magazine_name} n°${i.number} ?`)) return;
+      await DEL(`issues/${i.id}`);
+      invalidate();
+      location.hash = `#/magazines/${i.magazine_id}`;
+    };
+  }
+  await load();
+}
+
+// ---------------------------------------------------------------------------
+async function pageLists(view) {
+  const [series, platforms] = await Promise.all([GET('series'), GET('platforms')]);
+  const block = (title, table, list, extraField) => `
+    <div class="card"><h2>${title}</h2>
+      <form class="toolbar" data-table="${table}"><input name="name" placeholder="Nom" required style="max-width:220px">
+        ${extraField ? `<input name="${extraField[0]}" placeholder="${extraField[1]}" style="max-width:160px">` : ''}
+        <button type="submit" class="primary">Ajouter</button></form>
+      <div class="table-wrap"><table class="data"><thead><tr><th>Nom</th>${extraField ? `<th>${extraField[1]}</th>` : ''}
+        ${table === 'series' ? '<th class="num">Jeux</th>' : ''}<th class="num">Pubs</th><th class="num">Parutions</th><th></th></tr></thead>
+      <tbody>${list.map(x => `<tr data-id="${x.id}" data-table="${table}"><td><b>${esc(x.name)}</b></td>
+        ${extraField ? `<td>${esc(x[extraField[0]])}</td>` : ''}${table === 'series' ? `<td class="num">${x.games_count}</td>` : ''}
+        <td class="num">${x.ads_count}</td><td class="num"><a href="#/recherche?${table === 'series' ? 'series_id' : 'platform_id'}=${x.id}">${x.app_count}</a></td>
+        <td class="row-actions"><button type="button" class="icon" data-act="edit" title="Renommer">✎</button>
+        <button type="button" class="icon" data-act="del" title="Supprimer">🗑</button></td></tr>`).join('')}</tbody></table></div></div>`;
+  view.innerHTML = `<div class="page-head"><div><h1>Séries &amp; plateformes</h1>
+      <div class="sub">Listes utilisées par les jeux et les pubs.</div></div></div>
+    <div class="grid-2">${block('Séries', 'series', series)}${block('Plateformes', 'platforms', platforms, ['maker', 'Constructeur'])}</div>`;
+  view.addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const data = Object.fromEntries(new FormData(f));
+    try {
+      await POST(f.dataset.table, data);
+      invalidate();
+      toast('Ajouté');
+      render();
+    } catch (ex) { toast(ex.message, 'err'); }
+  });
+  view.addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const tr = b.closest('tr');
+    const table = tr.dataset.table, id = tr.dataset.id;
+    const list = table === 'series' ? series : platforms;
+    const x = list.find(r => String(r.id) === id);
+    if (b.dataset.act === 'del') {
+      if (!await confirmBox(`Supprimer « ${x.name} » ? Les jeux / pubs concernés n'auront simplement plus de ${table === 'series' ? 'série' : 'plateforme'}.`)) return;
+      await DEL(`${table}/${id}`);
+    } else {
+      const fields = [{ name: 'name', label: 'Nom', required: true, wide: true }];
+      if (table === 'platforms') fields.push({ name: 'maker', label: 'Constructeur', wide: true });
+      fields.push({ name: 'notes', label: 'Remarques', type: 'textarea', wide: true });
+      const r = await formModal({ title: 'Modifier', fields, values: x, onSubmit: d => PUT(`${table}/${id}`, d) });
+      if (!r) return;
+    }
+    invalidate();
+    render();
+  });
+}
+
+// ---------------------------------------------------------------------------
+async function pageExport(view) {
+  const exports = [['apparitions', 'Toutes les parutions (la liste complète, une ligne par pub trouvée)'],
+    ['pubs', 'Pubs'], ['jeux', 'Jeux'], ['magazines', 'Magazines'], ['numeros', 'Numéros'],
+    ['series', 'Séries'], ['plateformes', 'Plateformes']];
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Export &amp; sauvegarde</h1></div></div>
+    <div class="grid-2">
+      <div class="card"><h2>Exports Excel (CSV)</h2>
+        <p class="muted">Fichiers CSV (séparateur « ; ») qui s'ouvrent directement dans Excel ou LibreOffice.
+        Pour exporter une sélection précise, utilisez le bouton Export de la page <a href="#/recherche">Recherche</a>.</p>
+        <ul class="list-mini">${exports.map(([k, l]) => `<li><span class="grow">${l}</span><a class="btn" href="/api/export/${k}.csv">⬇ ${k}.csv</a></li>`).join('')}</ul></div>
+      <div class="card"><h2>Sauvegarde complète</h2>
+        <p>Un fichier ZIP avec la base et toutes les images. À faire régulièrement et à garder ailleurs (clé USB, cloud…).</p>
+        <p><a class="btn primary" href="/api/sauvegarde.zip">⬇ Télécharger la sauvegarde</a></p>
+        <h3 style="margin-top:18px">Où sont les données ?</h3>
+        <p class="muted">Tout est dans le dossier <b>data</b> à côté de l'application : la base (<code>bdd_pubs.sqlite</code>),
+        les images et leurs miniatures. Une copie de la base est aussi faite automatiquement à chaque démarrage
+        dans <code>data/sauvegardes</code> (15 dernières).</p>
+        <h3 style="margin-top:18px">Restaurer / changer d'ordinateur</h3>
+        <p class="muted">Fermer l'application, dézipper la sauvegarde à côté de l'application (elle contient le dossier <b>data</b>)
+        en remplaçant l'existant, puis relancer.</p></div>
+    </div>`;
+}
+
+// ===========================================================================
+// Routeur
+// ===========================================================================
+const ROUTES = [
+  [/^\/?$/, pageHome, 'accueil'],
+  [/^\/saisie$/, pageEntry, 'saisie'],
+  [/^\/recherche$/, pageSearch, 'recherche'],
+  [/^\/pubs$/, pageAds, 'pubs'],
+  [/^\/pubs\/(\d+)$/, pageAd, 'pubs'],
+  [/^\/jeux$/, pageGames, 'jeux'],
+  [/^\/jeux\/(\d+)$/, pageGame, 'jeux'],
+  [/^\/magazines$/, pageMagazines, 'magazines'],
+  [/^\/magazines\/(\d+)$/, pageMagazine, 'magazines'],
+  [/^\/numeros\/(\d+)$/, pageIssue, 'magazines'],
+  [/^\/listes$/, pageLists, 'listes'],
+  [/^\/export$/, pageExport, 'export'],
+];
+
+let renderToken = 0;
+async function render() {
+  const token = ++renderToken;
+  const raw = location.hash.slice(1) || '/';
+  const [path, query] = raw.split('?');
+  const params = Object.fromEntries(new URLSearchParams(query || ''));
+  while (overlays.length) overlays[overlays.length - 1]._close();
+  const main = $('#main');
+  const route = ROUTES.find(([re]) => re.test(path));
+  $$('#nav a').forEach(a => a.classList.toggle('active', !!route && a.dataset.nav === route[2]));
+  if (!route) { main.innerHTML = '<div class="error-box">Page introuvable. <a href="#/">Retour à l\'accueil</a></div>'; return; }
+  const view = el('div');
+  try {
+    await route[1](view, params, ...path.match(route[0]).slice(1));
+    if (token !== renderToken) return;
+    main.replaceChildren(view);
+    window.scrollTo(0, 0);
+  } catch (e) {
+    if (token !== renderToken) return;
+    main.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
+  }
+}
+window.addEventListener('hashchange', render);
+render();

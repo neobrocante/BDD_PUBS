@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BDD Pubs</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/">
+      <span class="logo">広</span>
+      <span>BDD Pubs</span>
+    </a>
+    <nav id="nav">
+      <a href="#/" data-nav="accueil">Accueil</a>
+      <a href="#/saisie" data-nav="saisie" class="primary">＋ Saisie rapide</a>
+      <a href="#/recherche" data-nav="recherche">Recherche</a>
+      <a href="#/pubs" data-nav="pubs">Pubs</a>
+      <a href="#/jeux" data-nav="jeux">Jeux</a>
+      <a href="#/magazines" data-nav="magazines">Magazines</a>
+      <a href="#/listes" data-nav="listes">Séries &amp; plateformes</a>
+      <a href="#/export" data-nav="export">Export</a>
+    </nav>
+  </header>
+  <main id="main"><p class="loading">Chargement…</p></main>
+  <div id="toasts" aria-live="polite"></div>
+</body>
+</html>

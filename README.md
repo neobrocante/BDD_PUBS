@@ -1,5 +1,13 @@
 # BDD Pubs : base des publicités de jeux vidéo dans les magazines
 
+Deux versions :
+
+- **L'application** (dossier [`appli/`](appli/README.md)) : application locale dans le navigateur,
+  avec images, saisie rapide, recherche croisée, exports et sauvegardes. **Version recommandée.**
+- **Le fichier Excel** (`BDD_Pubs.xlsx`), décrit ci-dessous, pour qui préfère rester dans un tableur.
+
+---
+
 Un simple fichier Excel (`BDD_Pubs.xlsx`), à ouvrir dans Excel ou LibreOffice, sans rien installer.
 Il sert à référencer à la main les pubs trouvées dans les magazines (Famitsu, etc.) et à les
 retrouver par recherche croisée.
