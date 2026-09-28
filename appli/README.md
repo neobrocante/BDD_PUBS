@@ -3,24 +3,41 @@
 Application locale (dans le navigateur, sur `http://localhost:8765`) pour référencer les pubs de
 jeux vidéo trouvées dans les magazines, avec leurs images.
 
-Aucune installation à part **Python 3** (gratuit). Pas d'Internet nécessaire, pas de compte :
-tout reste sur l'ordinateur, dans le dossier `data`.
+Rien à installer avec l'exécutable Windows (sinon, Python 3). Pas d'Internet nécessaire, pas de
+compte : tout reste sur l'ordinateur, dans le dossier `data`.
 
-## Installation (une seule fois)
+## Lancer l'application
+
+### Windows, sans rien installer : `BDD Pubs.exe`
+
+Double-cliquer sur **`BDD Pubs.exe`**. L'application s'ouvre dans le navigateur, sans aucune
+fenêtre noire.
+
+- 1er lancement : si Windows affiche « Windows a protégé votre ordinateur », cliquer sur
+  « Informations complémentaires » puis « Exécuter quand même » (l'exécutable n'est pas signé).
+- Les données sont dans le dossier `data`, créé à côté de l'exécutable : garder les deux ensemble.
+- Pour l'avoir sur le bureau : clic droit sur `BDD Pubs.exe` > « Afficher d'autres options » >
+  « Envoyer vers » > « Bureau (créer un raccourci) ».
+
+Où trouver l'exécutable : il est construit automatiquement par GitHub à chaque mise à jour.
+Sur la page du dépôt : onglet **Actions** > « Exécutable Windows » > dernière exécution réussie >
+en bas, **BDD-Pubs-Windows** (un ZIP contenant `BDD Pubs.exe`).
+
+### Avec Python installé : `BDD Pubs.pyw`
 
 1. Installer Python 3 : <https://www.python.org/downloads/>
-   - Sous Windows, **cocher « Add python.exe to PATH »** au début de l'installation.
-2. Copier ce dossier `appli` où vous voulez (Documents, bureau…).
+   (sous Windows, **cocher « Add python.exe to PATH »**).
+2. Double-cliquer sur **`BDD Pubs.pyw`** : même fonctionnement que l'exécutable, sans fenêtre noire.
 
-## Lancer
+Sur Mac : double-cliquer sur `Lancer BDD Pubs (Mac-Linux).command` (la 1re fois : clic droit >
+Ouvrir). Ou, dans un terminal : `python3 app.py`.
 
-- **Windows** : double-cliquer sur `Lancer BDD Pubs (Windows).bat`
-- **Mac** : double-cliquer sur `Lancer BDD Pubs (Mac-Linux).command`
-  (la 1re fois : clic droit > Ouvrir, pour passer l'avertissement de sécurité)
-- **Ou**, dans un terminal : `python app.py`
+### Arrêt
 
-Une fenêtre noire s'ouvre (c'est le serveur, la laisser ouverte) et le navigateur s'ouvre sur
-l'application. Pour arrêter : fermer la fenêtre noire.
+Rien à faire : **l'application s'arrête toute seule quand on ferme son dernier onglet**
+(quelques secondes après ; recharger la page ou ouvrir un 2e onglet ne l'arrête pas).
+On peut aussi cliquer sur **⏻ Quitter** en haut à droite.
+Double-cliquer alors qu'elle tourne déjà rouvre simplement l'onglet.
 
 ## Ce qu'on peut faire
 
@@ -48,10 +65,10 @@ page → `Entrée` pour enregistrer. Le magazine et le numéro restent en place 
 
 ## Utiliser le téléphone pour prendre les pubs en photo
 
-Lancer avec l'option réseau : `python app.py --reseau`. L'adresse à ouvrir sur le téléphone
-(même Wi-Fi) s'affiche dans la fenêtre noire, par ex. `http://192.168.1.20:8765`. Dans le
-champ image, le téléphone propose alors d'utiliser l'appareil photo.
-(À ne faire que sur un réseau de confiance : il n'y a pas de mot de passe.)
+Page **Export** > cocher « Rendre l'application accessible depuis le téléphone ». L'adresse à
+ouvrir sur le téléphone (même Wi-Fi) s'affiche, par ex. `http://192.168.1.20:8765`. Dans les
+champs image, le téléphone propose alors l'appareil photo. Le réglage est retenu pour les
+lancements suivants. (Pas de mot de passe : à n'activer que sur un réseau de confiance.)
 
 ## Sauvegardes
 
@@ -65,8 +82,12 @@ champ image, le téléphone propose alors d'utiliser l'appareil photo.
 
 - `app.py` : serveur Python, bibliothèque standard uniquement ; base SQLite `data/bdd_pubs.sqlite`.
 - `static/` : l'interface (HTML/CSS/JavaScript, sans dépendance ni connexion Internet).
-- Options : `--port 8766`, `--no-browser`, `--reseau`, `--demo` (données d'exemple si la base est vide).
-  Variable `BDD_PUBS_DATA` pour placer les données ailleurs.
+- Options : `--port 8766`, `--no-browser` (et pas d'arrêt automatique), `--sans-arret-auto`,
+  `--reseau`, `--demo` (données d'exemple si la base est vide).
+  Variable `BDD_PUBS_DATA` pour placer les données ailleurs. Sans fenêtre (`.pyw` / `.exe`), les
+  messages vont dans `data/journal.txt`.
+- L'exécutable Windows est construit par `.github/workflows/executable-windows.yml` (PyInstaller),
+  qui vérifie aussi qu'il démarre et répond avant de le publier.
 - Ajouter un champ : ajouter une étape `ALTER TABLE …` à la liste `MIGRATIONS` de `app.py`
   (elle est appliquée une seule fois, au démarrage suivant), puis le champ dans `SPEC` et dans
   le formulaire correspondant de `static/app.js`.

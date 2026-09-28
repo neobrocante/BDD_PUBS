@@ -1,0 +1,81 @@
+# Construit « BDD Pubs.exe » (Windows, sans Python à installer) à chaque modification de l'appli.
+# Le résultat se télécharge dans l'onglet Actions du dépôt > dernière exécution > « BDD-Pubs-Windows ».
+name: Exécutable Windows
+
+on:
+  push:
+    paths:
+      - "appli/**"
+      - ".github/workflows/executable-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer PyInstaller
+        run: python -m pip install --upgrade pyinstaller
+
+      - name: Construire BDD Pubs.exe
+        working-directory: appli
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name "BDD Pubs" --icon icone.ico
+          --add-data "static;static"
+          app.py
+
+      - name: Vérifier que l'exécutable démarre et répond
+        working-directory: appli
+        shell: pwsh
+        run: |
+          $env:BDD_PUBS_DATA = Join-Path $env:RUNNER_TEMP "donnees-test"
+          $p = Start-Process -FilePath "dist\BDD Pubs.exe" -ArgumentList "--no-browser","--demo" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            try { $r = Invoke-WebRequest "http://127.0.0.1:8765/api/dashboard" -UseBasicParsing; $ok = $true; break } catch {}
+          }
+          if (-not $ok) { Get-Content (Join-Path $env:BDD_PUBS_DATA "journal.txt") -ErrorAction SilentlyContinue; throw "L'exécutable ne répond pas" }
+          $d = $r.Content | ConvertFrom-Json
+          if ($d.counts.games -lt 1) { throw "Données de démo absentes" }
+          $page = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing
+          if ($page.Content -notmatch "BDD Pubs") { throw "Interface introuvable" }
+          $js = Invoke-WebRequest "http://127.0.0.1:8765/app.js" -UseBasicParsing
+          if ($js.StatusCode -ne 200) { throw "app.js introuvable" }
+          Invoke-WebRequest "http://127.0.0.1:8765/api/quitter" -Method Post -Body "{}" -ContentType "application/json" -UseBasicParsing | Out-Null
+          if (-not $p.WaitForExit(15000)) { Stop-Process $p -Force; throw "Le bouton Quitter n'arrête pas l'application" }
+          Write-Host "OK : l'exécutable démarre, sert l'interface et s'arrête proprement."
+
+      - name: Préparer le paquet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force paquet | Out-Null
+          Copy-Item "appli\dist\BDD Pubs.exe" paquet\
+          @"
+          BDD Pubs
+          ========
+
+          Double-cliquer sur « BDD Pubs.exe » : l'application s'ouvre dans le navigateur.
+          Elle s'arrête toute seule quand on ferme son onglet (ou avec le bouton « Quitter »).
+
+          Les données (base + images) sont enregistrées dans le dossier « data »,
+          créé à côté de l'exécutable : garder les deux ensemble, et sauvegarder ce dossier.
+
+          1er lancement : si Windows affiche « Windows a protégé votre ordinateur »,
+          cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
+          "@ | Out-File -Encoding utf8 paquet\LISEZMOI.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BDD-Pubs-Windows
+          path: paquet/
+          retention-days: 90

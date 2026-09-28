@@ -1296,7 +1296,7 @@ async function pageExport(view) {
     ['pubs', 'Pubs'], ['jeux', 'Jeux'], ['magazines', 'Magazines'], ['numeros', 'Numéros'],
     ['series', 'Séries'], ['plateformes', 'Plateformes']];
   view.innerHTML = `
-    <div class="page-head"><div><h1>Export &amp; sauvegarde</h1></div></div>
+    <div class="page-head"><div><h1>Export, sauvegarde &amp; téléphone</h1></div></div>
     <div class="grid-2">
       <div class="card"><h2>Exports Excel (CSV)</h2>
         <p class="muted">Fichiers CSV (séparateur « ; ») qui s'ouvrent directement dans Excel ou LibreOffice.
@@ -1312,7 +1312,28 @@ async function pageExport(view) {
         <h3 style="margin-top:18px">Restaurer / changer d'ordinateur</h3>
         <p class="muted">Fermer l'application, dézipper la sauvegarde à côté de l'application (elle contient le dossier <b>data</b>)
         en remplaçant l'existant, puis relancer.</p></div>
+      <div class="card"><h2>Accès depuis le téléphone</h2>
+        <p class="muted">Pour saisir ou prendre les pubs en photo avec le téléphone, connecté au même Wi-Fi que l'ordinateur.
+        Pas de mot de passe : à n'activer que sur un réseau de confiance (maison).</p>
+        <label class="check" style="display:flex;gap:8px;align-items:center;font-weight:600">
+          <input type="checkbox" id="net"> Rendre l'application accessible depuis le téléphone</label>
+        <div id="net-info" style="margin-top:10px"></div></div>
     </div>`;
+  const box = $('#net', view), info = $('#net-info', view);
+  const show = st => {
+    box.checked = st.actif;
+    box.disabled = st.force;
+    info.innerHTML = st.actif
+      ? (st.url ? `Sur le téléphone, ouvrir : <b style="font-size:18px">${esc(st.url)}</b>
+          <br><small class="muted">Si Windows demande l'autorisation du pare-feu, cliquer sur « Autoriser ».
+          L'ordinateur doit rester allumé avec l'application ouverte.</small>` : 'Adresse réseau introuvable.')
+      : '';
+  };
+  show(await GET('reseau'));
+  box.addEventListener('change', async () => {
+    try { show(await POST('reseau', { actif: box.checked })); }
+    catch (e) { toast(e.message, 'err'); box.checked = false; }
+  });
 }
 
 // ===========================================================================
@@ -1357,3 +1378,47 @@ async function render() {
 }
 window.addEventListener('hashchange', render);
 render();
+
+// ===========================================================================
+// Présence : signale au serveur que l'onglet est ouvert. Quand le dernier
+// onglet est fermé, le serveur s'arrête tout seul.
+// ===========================================================================
+const TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let stoppedShown = false;
+
+function showStopped(text) {
+  if (stoppedShown) return;
+  stoppedShown = true;
+  const ov = el('div', 'overlay stopped', `<div class="modal"><header><h2>BDD Pubs est arrêtée</h2></header>
+    <div class="modal-body"><p style="margin-top:0">${esc(text)}</p>
+    <div class="actions"><button type="button" class="primary" data-retry>Réessayer</button></div></div></div>`);
+  $('[data-retry]', ov).onclick = async () => {
+    if (await heartbeat()) { ov.remove(); stoppedShown = false; render(); }
+  };
+  document.body.append(ov);
+}
+
+async function heartbeat() {
+  try {
+    const r = await fetch('/api/ping', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tab: TAB_ID }),
+    });
+    await r.text(); // lire la réponse libère la connexion
+    return r.ok;
+  } catch (_) {
+    showStopped('Relancez « BDD Pubs » (double-clic), puis cliquez sur Réessayer. Vous pouvez aussi fermer cet onglet.');
+    return false;
+  }
+}
+heartbeat();
+setInterval(() => { if (!stoppedShown) heartbeat(); }, 20000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !stoppedShown) heartbeat(); });
+window.addEventListener('pagehide', () => {
+  navigator.sendBeacon('/api/bye', new Blob([JSON.stringify({ tab: TAB_ID })], { type: 'text/plain' }));
+});
+
+$('#quit').addEventListener('click', async () => {
+  if (!await confirmBox('Arrêter l\'application ? (elle s\'arrête aussi toute seule quand vous fermez l\'onglet)', 'Quitter')) return;
+  try { await POST('quitter', {}); } catch (_) { /* déjà arrêtée */ }
+  showStopped('L\'application est arrêtée. Vous pouvez fermer cet onglet.');
+});

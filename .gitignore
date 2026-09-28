@@ -2,3 +2,6 @@ __pycache__/
 ~$*.xlsx
 .~lock.*#
 appli/data/
+appli/build/
+appli/dist/
+*.spec

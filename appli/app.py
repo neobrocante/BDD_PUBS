@@ -26,6 +26,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 import webbrowser
@@ -34,8 +35,14 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(HERE, "static")
+FROZEN = getattr(sys, "frozen", False)  # True dans l'exécutable « BDD Pubs.exe »
+if FROZEN:
+    # Données à côté de l'exécutable, interface embarquée dans l'exécutable
+    HERE = os.path.dirname(os.path.abspath(sys.executable))
+    STATIC_DIR = os.path.join(getattr(sys, "_MEIPASS", HERE), "static")
+else:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    STATIC_DIR = os.path.join(HERE, "static")
 DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
 IMG_DIR = os.path.join(DATA_DIR, "images")
 THUMB_DIR = os.path.join(DATA_DIR, "miniatures")
@@ -901,6 +908,26 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) > 1 and parts[1].isdigit():
             rid = int(parts[1])
 
+        if head == "ping":
+            if method == "POST":
+                PRESENCE.ping(self.read_json().get("tab", "?"))
+            return self.send_json({"app": "bdd_pubs", "ok": True})
+        if head == "bye" and method == "POST":
+            PRESENCE.bye(self.read_json().get("tab", "?"))
+            return self.send_json({"ok": True})
+        if head == "quitter" and method == "POST":
+            self.send_json({"ok": True})
+            STOP.set()
+            return
+        if head == "reseau":
+            if method == "POST":
+                on = bool(self.read_json().get("actif"))
+                if on:
+                    NETWORK.enable()
+                else:
+                    NETWORK.disable()
+                save_settings(reseau=on)
+            return self.send_json(NETWORK.status())
         if method == "GET" and head == "meta":
             return self.send_json({"platforms": list_platforms(db, {}), "series": list_series(db, {}),
                                    "magazines": list_magazines(db, {})})
@@ -1014,51 +1041,221 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(405, "Méthode non autorisée")
 
 
-def main():
+# ---------------------------------------------------------------------------
+# Arrêt automatique : l'onglet envoie un signe de vie toutes les 20 s ;
+# quand plus aucun onglet n'est ouvert, le serveur s'arrête tout seul.
+# ---------------------------------------------------------------------------
+class Presence:
+    IDLE = 150   # s sans aucun signe de vie (onglet en arrière-plan : le navigateur ralentit ses envois)
+    GRACE = 12   # s après la fermeture du dernier onglet (laisse le temps d'un rechargement de page)
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.tabs = {}
+        self.last_seen = time.monotonic()
+        self.closed_at = None
+
+    def ping(self, tab):
+        with self.lock:
+            now = time.monotonic()
+            self.tabs[str(tab)] = now
+            self.last_seen = now
+            self.closed_at = None
+
+    def bye(self, tab):
+        with self.lock:
+            self.tabs.pop(str(tab), None)
+            if not self.tabs:
+                self.closed_at = time.monotonic()
+
+    def reset(self):
+        """Après une mise en veille de l'ordinateur : on laisse aux onglets le temps de se manifester."""
+        with self.lock:
+            now = time.monotonic()
+            self.tabs = {k: now for k in self.tabs}
+            self.last_seen = now
+            if self.closed_at is not None:
+                self.closed_at = now
+
+    def should_stop(self):
+        with self.lock:
+            now = time.monotonic()
+            self.tabs = {k: t for k, t in self.tabs.items() if now - t < self.IDLE}
+            if self.tabs:
+                return False
+            if self.closed_at is not None and now - self.closed_at > self.GRACE:
+                return True
+            return now - self.last_seen > self.IDLE
+
+
+PRESENCE = Presence()
+STOP = threading.Event()
+
+
+def load_settings():
+    try:
+        with open(os.path.join(DATA_DIR, "reglages.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(**changes):
+    data = load_settings()
+    data.update(changes)
+    with open(os.path.join(DATA_DIR, "reglages.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+class Network:
+    """Accès depuis le téléphone : 2e écoute sur l'adresse de l'ordinateur dans le réseau local."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.httpd = None
+        self.port = None
+        self.always = False  # lancé avec --reseau : déjà accessible partout
+
+    def status(self):
+        ip = lan_ip()
+        return {"actif": self.always or self.httpd is not None,
+                "force": self.always,
+                "url": f"http://{ip}:{self.port}" if ip else None}
+
+    def enable(self):
+        with self.lock:
+            if self.always or self.httpd:
+                return
+            ip = lan_ip()
+            if not ip:
+                raise ApiError(409, "Aucun réseau local détecté (l'ordinateur est-il connecté au Wi-Fi ?)")
+            try:
+                srv = Server((ip, self.port), Handler)
+            except OSError as e:
+                raise ApiError(409, f"Impossible d'ouvrir l'accès réseau : {e}")
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.httpd = srv
+
+    def disable(self):
+        with self.lock:
+            srv, self.httpd = self.httpd, None
+        if srv:
+            srv.shutdown()
+            srv.server_close()
+
+
+NETWORK = Network()
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # Sous Windows, SO_REUSEADDR permettrait d'occuper un port déjà pris par un autre programme
+    allow_reuse_address = sys.platform != "win32"
+
+
+def watchdog(httpd, auto_stop):
+    prev = time.monotonic()
+    while not STOP.wait(3):
+        now = time.monotonic()
+        if now - prev > 30:  # l'ordinateur sortait de veille
+            PRESENCE.reset()
+        prev = now
+        if auto_stop and PRESENCE.should_stop():
+            print(f"{datetime.now():%Y-%m-%d %H:%M:%S} Plus aucun onglet ouvert : arrêt.")
+            break
+    httpd.shutdown()
+
+
+def is_our_app(port):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1.5) as r:
+            return json.loads(r.read().decode("utf-8")).get("app") == "bdd_pubs"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def lan_ip():
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description="BDD Pubs : application locale")
     ap.add_argument("--port", type=int, default=int(os.environ.get("BDD_PUBS_PORT", 8765)))
-    ap.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="ne pas ouvrir le navigateur (et pas d'arrêt automatique)")
     ap.add_argument("--reseau", action="store_true",
                     help="accessible depuis les autres appareils du réseau local (téléphone...)")
+    ap.add_argument("--sans-arret-auto", action="store_true",
+                    help="ne pas s'arrêter quand le dernier onglet est fermé")
     ap.add_argument("--demo", action="store_true", help="charger des données d'exemple si la base est vide")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if sys.stdout is None or sys.stderr is None:
+        # Lancé sans fenêtre (BDD Pubs.pyw / BDD Pubs.exe) : messages dans data/journal.txt
+        log = open(os.path.join(DATA_DIR, "journal.txt"), "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = log
+
+    # Déjà lancée ? On rouvre simplement l'onglet.
+    port = None
+    for p in range(args.port, args.port + 10):
+        if is_our_app(p):
+            print(f"BDD Pubs tourne déjà sur le port {p} : ouverture du navigateur.")
+            if not args.no_browser:
+                webbrowser.open(f"http://localhost:{p}")
+            return
+        try:
+            httpd = Server(("0.0.0.0" if args.reseau else "127.0.0.1", p), Handler)
+            port = p
+            break
+        except OSError:
+            continue
+    if port is None:
+        print(f"Aucun port libre entre {args.port} et {args.port + 9}.")
+        sys.exit(1)
 
     init_db()
     if args.demo:
         load_demo()
 
-    host = "0.0.0.0" if args.reseau else "127.0.0.1"
-    try:
-        httpd = ThreadingHTTPServer((host, args.port), Handler)
-    except OSError:
-        print(f"Le port {args.port} est déjà utilisé : l'application tourne peut-être déjà.")
-        print(f"Ouvrez http://localhost:{args.port} ou relancez avec --port 8766")
-        if not args.no_browser:
-            webbrowser.open(f"http://localhost:{args.port}")
-        sys.exit(1)
-    httpd.daemon_threads = True
-    url = f"http://localhost:{args.port}"
+    url = f"http://localhost:{port}"
+    auto_stop = not (args.no_browser or args.sans_arret_auto)
     print("=" * 60)
     print(f"  BDD Pubs est lancée : {url}")
-    if args.reseau:
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("192.0.2.1", 80))
-            print(f"  Depuis un téléphone (même Wi-Fi) : http://{s.getsockname()[0]}:{args.port}")
-            s.close()
-        except OSError:
-            pass
+    if args.reseau and lan_ip():
+        print(f"  Depuis un téléphone (même Wi-Fi) : http://{lan_ip()}:{port}")
     print(f"  Données : {DATA_DIR}")
-    print("  Pour arrêter : fermer cette fenêtre (ou Ctrl+C)")
+    if auto_stop:
+        print("  S'arrête toute seule quand on ferme le dernier onglet.")
+    else:
+        print("  Pour arrêter : fermer cette fenêtre (ou Ctrl+C)")
     print("=" * 60)
+    NETWORK.port, NETWORK.always = port, args.reseau
+    if load_settings().get("reseau") and not args.reseau:
+        try:
+            NETWORK.enable()
+            print(f"  Accès téléphone activé : {NETWORK.status()['url']}")
+        except ApiError as e:
+            print(f"  Accès téléphone non activé : {e.msg}")
+    threading.Thread(target=watchdog, args=(httpd, auto_stop), daemon=True).start()
     if not args.no_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nArrêt.")
     finally:
+        STOP.set()
+        NETWORK.disable()
         httpd.server_close()
 
 

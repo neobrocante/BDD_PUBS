@@ -313,3 +313,7 @@ dl.info dd { margin: 0; }
 }
 .toast.err { background: #9f1239; }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
+
+header.top .quit { margin-left: auto; padding: 5px 10px; color: var(--muted); font-size: 13px; }
+header.top .quit:hover { color: var(--no); }
+.overlay.stopped { z-index: 90; place-items: center; }
