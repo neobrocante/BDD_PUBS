@@ -152,11 +152,19 @@ function combo(opts) {
     const txt = input.value.trim();
     const words = norm(txt).split(/\s+/).filter(Boolean);
     const showAll = (selected && input.value === label(selected)) || !words.length;
+    const q = norm(txt);
+    const rank = it => {
+      const l = norm(label(it));
+      if (l.startsWith(q)) return 0;
+      const starts = l.split(/[\s\-:·/()]+/);
+      if (words.every(w => starts.some(x => x.startsWith(w)))) return 1;
+      return 2;
+    };
     shown = showAll ? items.slice(0, 300)
       : items.filter(it => {
         const t = norm(label(it) + ' ' + (extra ? extra(it) : ''));
         return words.every(w => t.includes(w));
-      }).slice(0, 150);
+      }).map((it, i) => [rank(it), i, it]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(x => x[2]).slice(0, 150);
     const lis = shown.map((it, i) =>
       `<li data-i="${i}" class="${selected && it.id === selected.id ? 'sel' : ''}">${render ? render(it) : esc(label(it))}</li>`);
     const canCreate = onCreate && txt && !showAll && !items.some(it => norm(label(it)) === norm(txt));
@@ -293,11 +301,10 @@ function seriesCombo(extraOpts = {}) {
 function gameCombo(extraOpts = {}) {
   return combo({
     source: getGames,
-    label: g => g.title + (g.year ? ` (${g.year})` : ''),
-    match: g => [g.title, g.title + (g.year ? ` (${g.year})` : ''), g.original_title].filter(Boolean),
-    extra: g => `${g.original_title} ${g.series_name || ''}`,
-    render: g => `<div>${esc(g.title)}${g.year ? ` <span class="opt-sub">(${g.year})</span>` : ''}
-        <div class="opt-sub">${esc([g.original_title, g.series_name].filter(Boolean).join(' · '))}</div></div>`,
+    label: g => g.title,
+    match: g => [g.title, g.original_title].filter(Boolean),
+    extra: g => g.original_title,
+    render: g => `<span style="flex:1">${esc(g.title)}</span><span class="opt-sub">${g.ads_count ? plural(g.ads_count, 'pub') : 'nouveau'}</span>`,
     placeholder: 'Tapez le titre…',
     onCreate: title => openGameForm({ title }),
     createText: t => `＋ Nouveau jeu « ${t} »`,
@@ -896,8 +903,11 @@ async function pageEntry(view, params) {
         <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
         <div class="step"><span class="num">2</span><h2>Pub trouvée</h2></div>
         <div class="form">
-          <div class="field wide"><span>Pub <b class="req">*</b></span><div id="f-ad"></div>
-            <small>Tapez le nom du jeu ou le n° de pub. Si elle n'existe pas : « Nouvelle pub ».</small></div>
+          <div class="field wide"><span>Jeu <b class="req">*</b></span><div id="f-game"></div>
+            <small>Tapez les premières lettres du jeu. S'il n'existe pas encore : « ＋ Nouveau jeu ».</small></div>
+          <div class="field wide" id="ad-pick" hidden><span>Quelle pub ? <b class="req">*</b></span>
+            <small>Touchez la pub si vous la reconnaissez (🔍 pour l'agrandir), sinon « ＋ Nouvelle pub ».</small>
+            <div class="ad-grid" id="ad-grid"></div></div>
           <div class="wide" id="ad-preview"></div>
           <label class="field"><span>Page</span><input id="f-page" placeholder="12, 表4…"></label>
           <div class="field"><span>En vente</span>
@@ -925,8 +935,70 @@ async function pageEntry(view, params) {
 
   const mag = magazineCombo({ onChange: () => refreshIssue() });
   $('#f-mag', view).append(mag.el);
-  const ad = adCombo({ onChange: a => showAd(a) });
-  $('#f-ad', view).append(ad.el);
+  // Étape 2 : d'abord le jeu, puis la pub reconnue parmi les miniatures de ce jeu
+  let selAd = null;
+  let gameAds = [];
+  const game = gameCombo({
+    placeholder: 'Final Fantasy VII, Biohazard…',
+    onChange: async g => {
+      selAd = null; showAd(null);
+      await drawAds();
+      // sur téléphone, la grille apparaît sous le champ : on l'amène à l'écran
+      if (g && TOUCH) $('#ad-pick', view).scrollIntoView({ block: 'start', behavior: 'smooth' });
+    },
+    onCreate: async title => {
+      const g = await openGameForm({ title });
+      if (g) setTimeout(() => newAdFor(g), 50); // nouveau jeu : forcément une nouvelle pub
+      return g;
+    },
+  });
+  $('#f-game', view).append(game.el);
+
+  async function drawAds() {
+    const box = $('#ad-pick', view), grid = $('#ad-grid', view);
+    const g = game.item;
+    if (!g) { box.hidden = true; grid.innerHTML = ''; return; }
+    gameAds = (await getAds()).filter(a => a.game_id === g.id).sort((a, b) => b.app_count - a.app_count || a.id - b.id);
+    if (game.item !== g) return;
+    box.hidden = false;
+    grid.innerHTML = gameAds.map(a => `<div class="ad-tile ${selAd && selAd.id === a.id ? 'sel' : ''}" data-id="${a.id}">
+        <button type="button" class="pick" data-id="${a.id}" title="Choisir cette pub">
+          <span class="im">${a.thumb_url ? `<img src="${esc(a.thumb_url)}" alt="" loading="lazy">` : '<span class="none">pas d\'image</span>'}</span>
+          <span class="t">${esc(a.description || 'Sans description')}</span>
+          <span class="s">${esc(a.platform_name || '')}</span>
+          <span class="s">${plural(a.app_count, 'parution')}</span>
+          ${selAd && selAd.id === a.id ? '<span class="ok">✓</span>' : ''}</button>
+        ${a.thumb_url ? `<button type="button" class="zoom icon" data-zoom="${a.id}" tabindex="-1" title="Agrandir">🔍</button>` : ''}</div>`).join('')
+      + `<button type="button" class="ad-tile new" data-new="1"><span class="plus">＋</span><span>Nouvelle pub<br>de ce jeu</span></button>`;
+  }
+  $('#ad-grid', view).addEventListener('click', async e => {
+    const zoom = e.target.closest('[data-zoom]');
+    if (zoom) {
+      const a = await GET(`ads/${zoom.dataset.zoom}`);
+      return lightbox(a.images.map(im => ({ url: im.url, caption: a.description })), 0);
+    }
+    if (e.target.closest('[data-new]')) return newAdFor(game.item);
+    const pick = e.target.closest('.pick');
+    if (!pick) return;
+    selAd = gameAds.find(a => a.id === +pick.dataset.id) || null;
+    drawAds();
+    showAd(selAd);
+    pageI.focus({ preventScroll: true });
+  });
+  async function newAdFor(g) {
+    const a = await openAdForm({ game_id: g.id });
+    if (!a) return;
+    selAd = (await getAds()).find(x => x.id === a.id) || null;
+    await drawAds();
+    showAd(selAd);
+  }
+  // Interface commune utilisée plus bas (enregistrement, rafraîchissement)
+  const ad = {
+    get value() { return selAd ? selAd.id : null; },
+    get item() { return selAd; },
+    async reload() { await drawAds(); selAd = selAd && ((await getAds()).find(a => a.id === selAd.id) || null); },
+    clear() { selAd = null; game.clear(); },
+  };
   // Aperçu de la pub choisie. Si elle n'a pas encore d'image, une zone permet de l'ajouter
   // tout de suite (l'image est rattachée à la pub : elle vaudra pour toutes ses parutions).
   function showAd(a) {
@@ -946,7 +1018,7 @@ async function pageEntry(view, params) {
         await ad.reload();
         showAd(ad.item);
       }, 'Cette pub n\'a pas encore d\'image : ajouter la photo / le scan');
-      dz.tabIndex = -1; // Tab passe directement de « Pub » à « Page »
+      dz.tabIndex = -1; // Tab passe directement à « Page »
       $('.ad-img-slot', box).append(dz);
     }
   }
@@ -995,14 +1067,19 @@ async function pageEntry(view, params) {
   async function save() {
     err.textContent = '';
     if (!mag.value) mag.resolve();
-    if (!ad.value) ad.resolve();
+    if (!game.value) { game.resolve(); if (game.value) await drawAds(); }
     if (!mag.value) { err.textContent = 'Choisissez un magazine.'; mag.focus(); return; }
     if (!numI.value.trim()) { err.textContent = 'Indiquez le numéro.'; numI.focus(); return; }
+    if (!game.value) {
+      err.textContent = game.text
+        ? `« ${game.text} » : touchez le jeu dans la liste sous le champ, ou « ＋ Nouveau jeu » pour le créer.`
+        : 'Indiquez le jeu.';
+      game.focus();
+      return;
+    }
     if (!ad.value) {
-      err.textContent = ad.text
-        ? `« ${ad.text} » : touchez la pub dans la liste sous le champ, ou « ＋ Nouvelle pub » pour la créer.`
-        : 'Choisissez (ou créez) la pub.';
-      ad.focus();
+      err.textContent = 'Touchez la pub correspondante dans les miniatures, ou « ＋ Nouvelle pub ».';
+      $('#ad-pick', view).scrollIntoView({ block: 'center', behavior: 'smooth' });
       return;
     }
     const btn = $('button[type=submit]', form);
@@ -1020,7 +1097,7 @@ async function pageEntry(view, params) {
       ad.clear();
       $('input[name=sale][value="0"]', form).checked = true;
       await refreshIssue();
-      ad.focus();
+      if (!TOUCH) game.focus();
     } catch (e) {
       err.textContent = e.message;
     } finally {
@@ -1044,7 +1121,7 @@ async function pageEntry(view, params) {
     await mag.set(start.magazine_id, true);
     if (mag.value) { numI.value = start.number; await refreshIssue(); }
   }
-  setTimeout(() => (mag.value && numI.value ? ad.input : mag.input).focus(), 50);
+  if (!TOUCH) setTimeout(() => (mag.value && numI.value ? game.input : mag.input).focus(), 50);
 }
 
 // ---------------------------------------------------------------------------

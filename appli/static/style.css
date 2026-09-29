@@ -350,3 +350,26 @@ table.data td.row-actions .btn, table.data td.row-actions button:not(.icon) { pa
   padding: 8px 16px; background: var(--warn-soft); border-bottom: 1px solid #d9a400; font-weight: 600;
 }
 .update-bar button { padding: 4px 12px; }
+
+/* ---------- Choix de la pub par miniature (saisie rapide) ---------- */
+.ad-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin-top: 6px; }
+.ad-tile { position: relative; }
+.ad-tile .pick, .ad-tile.new {
+  width: 100%; height: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 2px;
+  padding: 6px; border-radius: 10px; border: 2px solid var(--line); background: var(--panel); text-align: left;
+  white-space: normal; font-size: 12px;
+}
+.ad-tile .pick:hover { border-color: var(--accent); background: var(--panel); }
+.ad-tile.sel .pick { border-color: var(--accent); background: var(--accent-soft); }
+.ad-tile .im { aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; }
+.ad-tile .im img { width: 100%; height: 100%; object-fit: cover; }
+.ad-tile .im .none { color: var(--muted); font-size: 11px; }
+.ad-tile .t { font-weight: 600; margin-top: 4px; line-height: 1.25; }
+.ad-tile .s { color: var(--muted); font-size: 11px; }
+.ad-tile .ok {
+  position: absolute; top: 10px; left: 10px; width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--accent); color: var(--accent-text); font-weight: 700;
+}
+.ad-tile .zoom { position: absolute; top: 10px; right: 10px; background: var(--panel); border-radius: 6px; padding: 2px 5px; }
+.ad-tile.new { align-items: center; justify-content: center; border-style: dashed; color: var(--accent); font-weight: 600; text-align: center; min-height: 150px; }
+.ad-tile.new .plus { font-size: 28px; line-height: 1; }

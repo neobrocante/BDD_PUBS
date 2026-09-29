@@ -75,10 +75,16 @@ Glisser-déposer, cliquer pour choisir un fichier, ou coller une capture (Ctrl+V
 sont créées automatiquement ; un clic sur une image l'affiche en grand (flèches ← →). L'étoile ★
 choisit l'image principale.
 
-### Saisie au clavier
+### Saisie rapide : le jeu, puis la pub reconnue à sa miniature
 
-Dans la saisie rapide : taper le nom du jeu dans « Pub » → `Entrée` pour choisir → `Tab` →
-page → `Entrée` pour enregistrer. Le magazine et le numéro restent en place pour la pub suivante.
+1. Taper les premières lettres du **jeu** (les titres qui commencent par ces lettres viennent en
+   premier). Jeu inconnu : « ＋ Nouveau jeu », puis la fenêtre « Nouvelle pub » s'ouvre d'elle-même.
+2. Les **miniatures de toutes les pubs de ce jeu** s'affichent : toucher celle qu'on reconnaît
+   (🔍 pour l'agrandir), ou « ＋ Nouvelle pub » si c'en est une autre.
+3. Page, en vente ○/×, remarques, **Enregistrer**. Le magazine et le numéro restent en place
+   pour la pub suivante.
+
+Au clavier : lettres du jeu → `Entrée` → `Tab` jusqu'à la miniature → `Entrée` → page → `Entrée`.
 
 ## Projets
 
