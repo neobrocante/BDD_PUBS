@@ -1,5 +1,6 @@
 # Construit « BDD Pubs.exe » (Windows, sans Python à installer) à chaque modification de l'appli.
-# Le résultat se télécharge dans l'onglet Actions du dépôt > dernière exécution > « BDD-Pubs-Windows ».
+# Le résultat se télécharge dans l'onglet Actions du dépôt > dernière exécution :
+#  « BDD-Pubs-Windows » (un seul fichier) ou « BDD-Pubs-Windows-dossier » (dossier, plus discret pour les antivirus).
 name: Exécutable Windows
 
 on:
@@ -25,47 +26,59 @@ jobs:
       - name: Installer PyInstaller
         run: python -m pip install --upgrade pyinstaller
 
-      - name: Construire BDD Pubs.exe
+      - name: Construire BDD Pubs.exe (fichier unique)
         working-directory: appli
         run: >
           pyinstaller --noconfirm --clean --onefile --windowed
           --name "BDD Pubs" --icon icone.ico
           --add-data "static;static"
+          --distpath dist_fichier --workpath build_fichier
           app.py
 
-      - name: Vérifier que l'exécutable démarre et répond
+      - name: Construire la version « dossier » (ne se décompresse pas à chaque lancement)
+        working-directory: appli
+        run: >
+          pyinstaller --noconfirm --clean --onedir --windowed
+          --name "BDD Pubs" --icon icone.ico
+          --add-data "static;static"
+          --distpath dist_dossier --workpath build_dossier
+          app.py
+
+      - name: Vérifier que les deux exécutables démarrent et répondent
         working-directory: appli
         shell: pwsh
         run: |
-          $env:BDD_PUBS_DATA = Join-Path $env:RUNNER_TEMP "donnees-test"
-          $p = Start-Process -FilePath "dist\BDD Pubs.exe" -ArgumentList "--no-browser","--demo" -PassThru
-          $ok = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 1
-            try { $r = Invoke-WebRequest "http://127.0.0.1:8765/api/dashboard" -UseBasicParsing; $ok = $true; break } catch {}
+          function Test-Exe($exe, $label) {
+            $env:BDD_PUBS_DATA = Join-Path $env:RUNNER_TEMP "donnees-$label"
+            $p = Start-Process -FilePath $exe -ArgumentList "--no-browser","--demo" -PassThru
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              try { $r = Invoke-WebRequest "http://127.0.0.1:8765/api/dashboard" -UseBasicParsing; $ok = $true; break } catch {}
+            }
+            if (-not $ok) { Get-Content (Join-Path $env:BDD_PUBS_DATA "journal.txt") -ErrorAction SilentlyContinue; throw "$label : l'exécutable ne répond pas" }
+            $d = $r.Content | ConvertFrom-Json
+            if ($d.counts.games -lt 1) { throw "$label : données de démo absentes" }
+            $page = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing
+            if ($page.Content -notmatch "BDD Pubs") { throw "$label : interface introuvable" }
+            $js = Invoke-WebRequest "http://127.0.0.1:8765/app.js" -UseBasicParsing
+            if ($js.StatusCode -ne 200) { throw "$label : app.js introuvable" }
+            $proj = Invoke-WebRequest "http://127.0.0.1:8765/api/projets" -Method Post -Body '{"nom":"Démo","demo":true}' -ContentType "application/json; charset=utf-8" -UseBasicParsing | ConvertFrom-Json
+            $ads = Invoke-WebRequest "http://127.0.0.1:8765/api/ads" -Headers @{ "X-Projet" = $proj.id } -UseBasicParsing | ConvertFrom-Json
+            if ($ads.Count -lt 1) { throw "$label : projet de démonstration vide" }
+            $img = Invoke-WebRequest ("http://127.0.0.1:8765" + $ads[0].thumb_url) -UseBasicParsing
+            if ($img.StatusCode -ne 200) { throw "$label : image de démo introuvable" }
+            Invoke-WebRequest "http://127.0.0.1:8765/api/quitter" -Method Post -Body "{}" -ContentType "application/json" -UseBasicParsing | Out-Null
+            if (-not $p.WaitForExit(15000)) { Stop-Process $p -Force; throw "$label : le bouton Quitter n'arrête pas l'application" }
+            Write-Host "OK ($label) : l'exécutable démarre, sert l'interface et s'arrête proprement."
           }
-          if (-not $ok) { Get-Content (Join-Path $env:BDD_PUBS_DATA "journal.txt") -ErrorAction SilentlyContinue; throw "L'exécutable ne répond pas" }
-          $d = $r.Content | ConvertFrom-Json
-          if ($d.counts.games -lt 1) { throw "Données de démo absentes" }
-          $page = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing
-          if ($page.Content -notmatch "BDD Pubs") { throw "Interface introuvable" }
-          $js = Invoke-WebRequest "http://127.0.0.1:8765/app.js" -UseBasicParsing
-          if ($js.StatusCode -ne 200) { throw "app.js introuvable" }
-          $proj = Invoke-WebRequest "http://127.0.0.1:8765/api/projets" -Method Post -Body '{"nom":"Démo","demo":true}' -ContentType "application/json; charset=utf-8" -UseBasicParsing | ConvertFrom-Json
-          $ads = Invoke-WebRequest "http://127.0.0.1:8765/api/ads" -Headers @{ "X-Projet" = $proj.id } -UseBasicParsing | ConvertFrom-Json
-          if ($ads.Count -lt 1) { throw "Projet de démonstration vide" }
-          $img = Invoke-WebRequest ("http://127.0.0.1:8765" + $ads[0].thumb_url) -UseBasicParsing
-          if ($img.StatusCode -ne 200) { throw "Image de démo introuvable" }
-          Invoke-WebRequest "http://127.0.0.1:8765/api/quitter" -Method Post -Body "{}" -ContentType "application/json" -UseBasicParsing | Out-Null
-          if (-not $p.WaitForExit(15000)) { Stop-Process $p -Force; throw "Le bouton Quitter n'arrête pas l'application" }
-          Write-Host "OK : l'exécutable démarre, sert l'interface et s'arrête proprement."
+          Test-Exe "dist_fichier\BDD Pubs.exe" "fichier"
+          Test-Exe "dist_dossier\BDD Pubs\BDD Pubs.exe" "dossier"
 
-      - name: Préparer le paquet
+      - name: Préparer les paquets
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force paquet | Out-Null
-          Copy-Item "appli\dist\BDD Pubs.exe" paquet\
-          @"
+          $lisez = @"
           BDD Pubs
           ========
 
@@ -73,14 +86,28 @@ jobs:
           Elle s'arrête toute seule quand on ferme son onglet (ou avec le bouton « Quitter »).
 
           Les données (base + images) sont enregistrées dans le dossier « data »,
-          créé à côté de l'exécutable : garder les deux ensemble, et sauvegarder ce dossier.
+          créé à côté de « BDD Pubs.exe » : garder les deux ensemble, et sauvegarder ce dossier.
+          Pour reprendre les données d'une version précédente : copier son dossier « data »
+          à côté du nouveau « BDD Pubs.exe » (application fermée).
 
           1er lancement : si Windows affiche « Windows a protégé votre ordinateur »,
           cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
-          "@ | Out-File -Encoding utf8 paquet\LISEZMOI.txt
+          "@
+          New-Item -ItemType Directory -Force paquet_fichier | Out-Null
+          Copy-Item "appli\dist_fichier\BDD Pubs.exe" paquet_fichier\
+          $lisez | Out-File -Encoding utf8 paquet_fichier\LISEZMOI.txt
+          New-Item -ItemType Directory -Force paquet_dossier | Out-Null
+          Copy-Item "appli\dist_dossier\BDD Pubs" paquet_dossier\ -Recurse
+          $lisez | Out-File -Encoding utf8 "paquet_dossier\BDD Pubs\LISEZMOI.txt"
 
       - uses: actions/upload-artifact@v4
         with:
           name: BDD-Pubs-Windows
-          path: paquet/
+          path: paquet_fichier/
+          retention-days: 90
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BDD-Pubs-Windows-dossier
+          path: paquet_dossier/
           retention-days: 90

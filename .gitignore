@@ -5,3 +5,5 @@ appli/data/
 appli/build/
 appli/dist/
 *.spec
+appli/dist_*/
+appli/build_*/

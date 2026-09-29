@@ -18,7 +18,6 @@ import binascii
 import csv
 import io
 import json
-import mimetypes
 import os
 import re
 import shutil
@@ -76,6 +75,15 @@ REGISTRY_PATH = os.path.join(DATA_DIR, "projets.json")
 MAX_UPLOAD = 60 * 1024 * 1024
 IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "avif", "heic"}
 IMAGE_ENTITIES = {"ads", "appearances", "issues", "games"}
+# Types de fichiers servis (table interne : le module « mimetypes » de Python
+# lirait sinon toute la liste des types déclarés dans le registre Windows)
+CONTENT_TYPES = {
+    "html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
+    "css": "text/css; charset=utf-8", "svg": "image/svg+xml", "ico": "image/x-icon",
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif",
+    "webp": "image/webp", "bmp": "image/bmp", "tif": "image/tiff", "tiff": "image/tiff",
+    "avif": "image/avif", "heic": "image/heic", "zip": "application/zip",
+}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
 
@@ -1141,7 +1149,7 @@ class Handler(BaseHTTPRequestHandler):
     def send_file(self, path, ctype=None, cache=True, download_name=None):
         if not os.path.isfile(path):
             raise ApiError(404, "Fichier introuvable")
-        ctype = ctype or mimetypes.guess_type(path)[0] or "application/octet-stream"
+        ctype = ctype or CONTENT_TYPES.get(path.rsplit(".", 1)[-1].lower(), "application/octet-stream")
         size = os.path.getsize(path)
         self.send_response(200)
         self.send_header("Content-Type", ctype)

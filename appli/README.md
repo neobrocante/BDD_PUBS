@@ -21,7 +21,16 @@ fenêtre noire.
 
 Où trouver l'exécutable : il est construit automatiquement par GitHub à chaque mise à jour.
 Sur la page du dépôt : onglet **Actions** > « Exécutable Windows » > dernière exécution réussie >
-en bas, **BDD-Pubs-Windows** (un ZIP contenant `BDD Pubs.exe`).
+en bas, deux versions au choix :
+
+- **BDD-Pubs-Windows** : un seul fichier `BDD Pubs.exe`. Il se décompresse dans un dossier
+  temporaire à chaque lancement, ce que les antivirus (Avast…) analysent de près.
+- **BDD-Pubs-Windows-dossier** (conseillée si l'antivirus fait des histoires) : un dossier
+  `BDD Pubs` contenant `BDD Pubs.exe` et ses fichiers. Même utilisation (double-clic sur
+  `BDD Pubs.exe`), démarrage plus rapide, rien de décompressé à chaque lancement.
+
+Pour passer de l'une à l'autre en gardant ses données : fermer l'application, puis copier le
+dossier `data` à côté du nouveau `BDD Pubs.exe`.
 
 ### Avec Python installé : `BDD Pubs.pyw`
 
