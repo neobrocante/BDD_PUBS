@@ -45,7 +45,7 @@ else:
     STATIC_DIR = os.path.join(HERE, "static")
 DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
 
-APP_VERSION = "2026.09.29"
+APP_VERSION = "2026.09.29b"
 
 
 def build_id():

@@ -10,6 +10,7 @@ const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC[c]);
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const MARU = '○', BATSU = '×';
+const TOUCH = matchMedia('(pointer: coarse)').matches;
 
 function el(tag, cls, html) {
   const e = document.createElement(tag);
@@ -132,6 +133,7 @@ function confirmBox(msg, okLabel = 'Supprimer') {
 // ===========================================================================
 function combo(opts) {
   const { source, label, render, extra, placeholder = '', onCreate, onChange = () => {} } = opts;
+  const matchKeys = opts.match || (it => [label(it)]); // textes qui désignent exactement cet élément
   const createText = opts.createText || (t => `＋ Créer « ${t} »`);
   const wrap = el('div', 'combo', '<input type="text" autocomplete="off" spellcheck="false"><ul class="combo-list" hidden></ul>');
   const input = $('input', wrap), list = $('ul', wrap);
@@ -183,7 +185,7 @@ function combo(opts) {
     if (li.dataset.create) {
       const created = await onCreate(input.value.trim());
       if (created) { await ensure(true); setItem(items.find(x => x.id === created.id) || created); }
-      input.focus();
+      if (!TOUCH) input.focus();
       return;
     }
     setItem(shown[+li.dataset.i]);
@@ -191,7 +193,12 @@ function combo(opts) {
 
   input.addEventListener('focus', () => { input.select(); ensure(); });
   input.addEventListener('mousedown', () => { if (list.hidden) open(); });
-  input.addEventListener('input', () => { if (selected) { selected = null; onChange(null); } open(); });
+  input.addEventListener('input', () => {
+    // Les claviers de téléphone renvoient parfois le texte déjà présent : on ne désélectionne
+    // que si le texte a vraiment changé.
+    if (selected && input.value !== label(selected)) { selected = null; onChange(null); }
+    open();
+  });
   input.addEventListener('keydown', e => {
     const n = opts$().length;
     if (e.key === 'ArrowDown') {
@@ -214,7 +221,10 @@ function combo(opts) {
       if (!list.hidden) { e.stopPropagation(); close(); }
     }
   });
-  list.addEventListener('mousedown', e => {
+  // mousedown : garder le focus dans le champ ; le choix se fait au « click » (doigt relevé),
+  // sinon sur écran tactile le relâchement tombe sur la fenêtre qui vient de s'ouvrir.
+  list.addEventListener('mousedown', e => { e.preventDefault(); });
+  list.addEventListener('click', e => {
     const li = e.target.closest('li[data-i],li[data-create]');
     if (!li) return;
     e.preventDefault();
@@ -228,6 +238,16 @@ function combo(opts) {
 
   const c = {
     el: wrap, input,
+    /* Texte tapé sans choisir dans la liste : s'il désigne exactement un élément, on le retient. */
+    resolve() {
+      if (selected || !items) return selected ? selected.id : null;
+      const t = norm(input.value.trim());
+      if (!t) return null;
+      const hits = items.filter(it => matchKeys(it).some(k => norm(k).trim() === t));
+      if (hits.length === 1) { setItem(hits[0]); return hits[0].id; }
+      return null;
+    },
+    get text() { return input.value.trim(); },
     get value() { return selected ? selected.id : null; },
     get item() { return selected; },
     async set(id, silent) { await ensure(); setItem(items.find(it => it.id === id) || null, silent); },
@@ -274,6 +294,7 @@ function gameCombo(extraOpts = {}) {
   return combo({
     source: getGames,
     label: g => g.title + (g.year ? ` (${g.year})` : ''),
+    match: g => [g.title, g.title + (g.year ? ` (${g.year})` : ''), g.original_title].filter(Boolean),
     extra: g => `${g.original_title} ${g.series_name || ''}`,
     render: g => `<div>${esc(g.title)}${g.year ? ` <span class="opt-sub">(${g.year})</span>` : ''}
         <div class="opt-sub">${esc([g.original_title, g.series_name].filter(Boolean).join(' · '))}</div></div>`,
@@ -288,6 +309,7 @@ function adCombo(extraOpts = {}) {
   return combo({
     source: getAds,
     label: adLabel,
+    match: a => [adLabel(a), `#${a.id}`, String(a.id)],
     extra: a => `${a.original_title} ${a.series_name || ''} ${a.notes}`,
     render: a => `${a.thumb_url ? `<img class="opt-thumb" src="${esc(a.thumb_url)}" alt="">` : '<span class="opt-thumb"></span>'}
         <div><b>#${a.id}</b> ${esc(a.game_title)} <span class="opt-sub">${esc(a.platform_name || '')}</span>
@@ -483,7 +505,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', on
       } else if (f.type === 'combo') {
         const c = f.combo(values[f.name]);
         row.append(c.el);
-        ctrls[f.name] = { get: () => c.value, focus: () => c.focus(), c };
+        ctrls[f.name] = { get: () => c.value ?? c.resolve(), focus: () => c.focus(), c };
       } else if (f.type === 'select') {
         const s = el('select');
         s.innerHTML = f.options.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
@@ -516,7 +538,15 @@ function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', on
       const data = {};
       for (const [k, c] of Object.entries(ctrls)) data[k] = c.get();
       const missing = fields.find(f => f.required && (data[f.name] === '' || data[f.name] == null));
-      if (missing) { err.textContent = `Champ obligatoire : ${missing.label}`; ctrls[missing.name].focus(); return; }
+      if (missing) {
+        const c = ctrls[missing.name].c;
+        err.textContent = c && c.text
+          ? `${missing.label} : « ${c.text} » n'est pas encore choisi. Touchez-le dans la liste sous le champ, ou « ＋ Nouveau… » pour le créer.`
+          : `Champ obligatoire : ${missing.label}`;
+        ctrls[missing.name].focus();
+        if (c && c.text) c.input.dispatchEvent(new Event('input'));
+        return;
+      }
       const btn = $('button[type=submit]', form);
       btn.disabled = true;
       err.textContent = '';
@@ -964,9 +994,17 @@ async function pageEntry(view, params) {
 
   async function save() {
     err.textContent = '';
+    if (!mag.value) mag.resolve();
+    if (!ad.value) ad.resolve();
     if (!mag.value) { err.textContent = 'Choisissez un magazine.'; mag.focus(); return; }
     if (!numI.value.trim()) { err.textContent = 'Indiquez le numéro.'; numI.focus(); return; }
-    if (!ad.value) { err.textContent = 'Choisissez (ou créez) la pub.'; ad.focus(); return; }
+    if (!ad.value) {
+      err.textContent = ad.text
+        ? `« ${ad.text} » : touchez la pub dans la liste sous le champ, ou « ＋ Nouvelle pub » pour la créer.`
+        : 'Choisissez (ou créez) la pub.';
+      ad.focus();
+      return;
+    }
     const btn = $('button[type=submit]', form);
     btn.disabled = true;
     try {
