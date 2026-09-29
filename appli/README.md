@@ -29,6 +29,11 @@ en bas, deux versions au choix :
   `BDD Pubs` contenant `BDD Pubs.exe` et ses fichiers. Même utilisation (double-clic sur
   `BDD Pubs.exe`), démarrage plus rapide, rien de décompressé à chaque lancement.
 
+**Lien fixe vers la dernière version** : chaque mise à jour est aussi publiée dans la release
+« dernière version » du dépôt : <https://github.com/neobrocante/BDD_PUBS/releases/latest>
+(téléchargement direct : `…/releases/latest/download/BDD-Pubs-Windows-dossier.zip`).
+Tant que le dépôt est privé, seuls les comptes GitHub qui y ont accès peuvent l'ouvrir.
+
 Pour passer de l'une à l'autre en gardant ses données : fermer l'application, puis copier le
 dossier `data` à côté du nouveau `BDD Pubs.exe`.
 

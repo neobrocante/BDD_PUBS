@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # publier la release « derniere-version »
 
 jobs:
   windows:
@@ -111,3 +111,25 @@ jobs:
           name: BDD-Pubs-Windows-dossier
           path: paquet_dossier/
           retention-days: 90
+
+      - name: Publier la release « dernière version » (lien de téléchargement fixe)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path "paquet_dossier\BDD Pubs" -DestinationPath "BDD-Pubs-Windows-dossier.zip" -Force
+          Compress-Archive -Path "paquet_fichier\*" -DestinationPath "BDD-Pubs-Windows.zip" -Force
+          $notes = @"
+          Dernière version de BDD Pubs pour Windows (construite automatiquement le $(Get-Date -Format 'dd/MM/yyyy HH:mm') UTC).
+
+          - **BDD-Pubs-Windows-dossier.zip** (conseillé) : dézipper, puis double-cliquer sur « BDD Pubs.exe » dans le dossier « BDD Pubs ».
+          - **BDD-Pubs-Windows.zip** : un seul fichier « BDD Pubs.exe ».
+
+          Mise à jour : remplacer l'ancien programme, en gardant le dossier « data » à côté de « BDD Pubs.exe ».
+          1er lancement : si Windows affiche « Windows a protégé votre ordinateur », cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
+          "@
+          # remplace la release précédente (absente la 1re fois : on ignore l'erreur)
+          try { gh release delete derniere-version --yes --cleanup-tag 2>&1 | Out-Null } catch {}
+          $global:LASTEXITCODE = 0
+          gh release create derniere-version "BDD-Pubs-Windows-dossier.zip" "BDD-Pubs-Windows.zip" `
+            --title "BDD Pubs – dernière version" --notes $notes --target $env:GITHUB_SHA --latest
