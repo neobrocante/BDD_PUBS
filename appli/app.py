@@ -26,6 +26,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import unicodedata
 import time
 import traceback
 import uuid
@@ -44,10 +45,9 @@ else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(HERE, "static")
 DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
-IMG_DIR = os.path.join(DATA_DIR, "images")
-THUMB_DIR = os.path.join(DATA_DIR, "miniatures")
-BACKUP_DIR = os.path.join(DATA_DIR, "sauvegardes")
-DB_PATH = os.path.join(DATA_DIR, "bdd_pubs.sqlite")
+# Projets : le projet de base (« principal ») est à la racine de data/,
+# les projets supplémentaires dans data/projets/<id>/ (même organisation).
+REGISTRY_PATH = os.path.join(DATA_DIR, "projets.json")
 
 MAX_UPLOAD = 60 * 1024 * 1024
 IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "avif", "heic"}
@@ -166,19 +166,227 @@ PLATFORMS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Projets
+# ---------------------------------------------------------------------------
+class Project:
+    def __init__(self, pid, name, folder):
+        self.id = pid
+        self.name = name
+        self.dir = folder
+        self.db_path = os.path.join(folder, "bdd_pubs.sqlite")
+        self.img_dir = os.path.join(folder, "images")
+        self.thumb_dir = os.path.join(folder, "miniatures")
+        self.backup_dir = os.path.join(folder, "sauvegardes")
+        self.prefix = f"/p/{pid}"
+
+
+_CTX = threading.local()
+REG_LOCK = threading.RLock()
+OPENED = set()
+PRINCIPAL = "principal"
+
+
+def cur():
+    """Projet de la requête en cours."""
+    return _CTX.project
+
+
+def use_project(project):
+    _CTX.project = project
+    return project
+
+
+def load_registry():
+    with REG_LOCK:
+        try:
+            with open(REGISTRY_PATH, encoding="utf-8") as f:
+                reg = json.load(f)
+        except (OSError, ValueError):
+            reg = {}
+        projets = reg.setdefault("projets", {})
+        projets.setdefault(PRINCIPAL, {"nom": "Projet principal", "dossier": ""})
+        if reg.get("defaut") not in projets:
+            reg["defaut"] = PRINCIPAL
+        return reg
+
+
+def save_registry(reg):
+    with REG_LOCK:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = REGISTRY_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(reg, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, REGISTRY_PATH)
+
+
+def project_by_id(pid):
+    reg = load_registry()
+    pid = pid or reg["defaut"]
+    info = reg["projets"].get(pid)
+    if not info:
+        raise ApiError(404, "Projet introuvable (il a peut-être été supprimé).")
+    folder = os.path.join(DATA_DIR, info["dossier"]) if info["dossier"] else DATA_DIR
+    return Project(pid, info["nom"], folder)
+
+
+def open_project(pid=None):
+    """Projet prêt à l'emploi (dossiers créés, base à jour) et actif pour la requête."""
+    p = project_by_id(pid)
+    with REG_LOCK:
+        if p.id not in OPENED:
+            init_db(p)
+            OPENED.add(p.id)
+    return use_project(p)
+
+
+def slugify(name):
+    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii").lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:40]
+    return s or "projet"
+
+
+def create_project(name, demo=False):
+    name = (name or "").strip()
+    if not name:
+        raise ApiError(400, "Donnez un nom au projet")
+    with REG_LOCK:
+        reg = load_registry()
+        if any(v["nom"].lower() == name.lower() for v in reg["projets"].values()):
+            raise ApiError(409, "Un projet porte déjà ce nom.")
+        base = slugify(name)
+        pid, n = base, 2
+        while pid in reg["projets"] or os.path.exists(os.path.join(DATA_DIR, "projets", pid)):
+            pid, n = f"{base}-{n}", n + 1
+        reg["projets"][pid] = {"nom": name, "dossier": f"projets/{pid}"}
+        save_registry(reg)
+    p = open_project(pid)
+    if demo:
+        load_demo()
+    return p
+
+
+def quick_counts(p):
+    if not os.path.exists(p.db_path):
+        return {"ads": 0, "appearances": 0, "games": 0}
+    try:
+        db = sqlite3.connect(p.db_path, timeout=5)
+        try:
+            c = lambda t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            return {"ads": c("ads"), "appearances": c("appearances"), "games": c("games")}
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return None
+
+
+def projects_info(current_id):
+    reg = load_registry()
+    out = []
+    for pid, info in reg["projets"].items():
+        p = project_by_id(pid)
+        out.append({"id": pid, "nom": info["nom"], "defaut": pid == reg["defaut"],
+                    "protege": pid == PRINCIPAL, "actuel": pid == current_id,
+                    "stats": quick_counts(p)})
+    out.sort(key=lambda x: (x["id"] != PRINCIPAL, x["nom"].lower()))
+    return {"defaut": reg["defaut"], "actuel": current_id, "projets": out}
+
+
+def delete_project(pid):
+    with REG_LOCK:
+        reg = load_registry()
+        if pid not in reg["projets"]:
+            raise ApiError(404, "Projet introuvable")
+        if pid == PRINCIPAL:
+            raise ApiError(409, "Le projet de base ne peut pas être supprimé (vous pouvez le renommer).")
+        if pid == reg["defaut"]:
+            raise ApiError(409, "C'est le projet ouvert au lancement : choisissez-en un autre d'abord.")
+        folder = os.path.realpath(os.path.join(DATA_DIR, reg["projets"][pid]["dossier"]))
+        root = os.path.realpath(os.path.join(DATA_DIR, "projets"))
+        del reg["projets"][pid]
+        save_registry(reg)
+        OPENED.discard(pid)
+    if folder.startswith(root + os.sep):
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def import_project(stream, length, name):
+    """Crée un projet à partir d'un ZIP exporté (ou d'une sauvegarde complète)."""
+    if length <= 0:
+        raise ApiError(400, "Fichier vide")
+    tmpdir = tempfile.mkdtemp(prefix="bddpubs_import_")
+    try:
+        zpath = os.path.join(tmpdir, "import.zip")
+        with open(zpath, "wb") as f:
+            left = length
+            while left > 0:
+                chunk = stream.read(min(1 << 20, left))
+                if not chunk:
+                    break
+                f.write(chunk)
+                left -= len(chunk)
+        try:
+            z = zipfile.ZipFile(zpath)
+        except zipfile.BadZipFile:
+            raise ApiError(400, "Ce fichier n'est pas un ZIP valide.")
+        with z:
+            names = z.namelist()
+            dbs = sorted((n for n in names if n.endswith("bdd_pubs.sqlite") and "sauvegardes/" not in n), key=len)
+            if not dbs:
+                raise ApiError(400, "Ce ZIP ne contient pas de projet BDD Pubs (bdd_pubs.sqlite introuvable).")
+            base = dbs[0][:-len("bdd_pubs.sqlite")]
+            if not name and base + "projet.json" in names:
+                try:
+                    name = json.loads(z.read(base + "projet.json").decode("utf-8")).get("nom", "")
+                except ValueError:
+                    name = ""
+            name = (name or "Projet importé").strip()
+            reg = load_registry()
+            existing = {v["nom"].lower() for v in reg["projets"].values()}
+            final, n = name, 2
+            while final.lower() in existing:
+                final, n = f"{name} ({n})", n + 1
+            staging = os.path.join(tmpdir, "projet")
+            for d in ("images", "miniatures"):
+                os.makedirs(os.path.join(staging, d))
+            with open(os.path.join(staging, "bdd_pubs.sqlite"), "wb") as f:
+                f.write(z.read(dbs[0]))
+            for n_ in names:
+                for d in ("images", "miniatures"):
+                    if n_.startswith(f"{base}{d}/"):
+                        fname = n_.rsplit("/", 1)[-1]
+                        if fname and SAFE_NAME.match(fname):
+                            with open(os.path.join(staging, d, fname), "wb") as f:
+                                f.write(z.read(n_))
+        try:
+            db = sqlite3.connect(os.path.join(staging, "bdd_pubs.sqlite"))
+            db.execute("SELECT COUNT(*) FROM ads").fetchone()
+            db.close()
+        except sqlite3.Error:
+            raise ApiError(400, "La base contenue dans ce ZIP est illisible.")
+        p = create_project(final)
+        OPENED.discard(p.id)
+        shutil.rmtree(p.dir, ignore_errors=True)
+        shutil.move(staging, p.dir)
+        return open_project(p.id)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def connect():
-    db = sqlite3.connect(DB_PATH, timeout=15)
+    db = sqlite3.connect(cur().db_path, timeout=15)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
     return db
 
 
-def init_db():
-    for d in (DATA_DIR, IMG_DIR, THUMB_DIR, BACKUP_DIR):
+def init_db(p):
+    use_project(p)
+    for d in (p.dir, p.img_dir, p.thumb_dir, p.backup_dir):
         os.makedirs(d, exist_ok=True)
-    fresh = not os.path.exists(DB_PATH)
+    fresh = not os.path.exists(p.db_path)
     if not fresh:
-        backup_on_start()
+        backup_on_start(p)
     db = connect()
     version = db.execute("PRAGMA user_version").fetchone()[0]
     for i, step in enumerate(MIGRATIONS[version:], start=version + 1):
@@ -191,18 +399,18 @@ def init_db():
     db.close()
 
 
-def backup_on_start(keep=15):
+def backup_on_start(p, keep=15):
     """Copie de sécurité de la base à chaque lancement (garde les 15 dernières)."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest = os.path.join(BACKUP_DIR, f"bdd_pubs_{stamp}.sqlite")
-    src = sqlite3.connect(DB_PATH)
+    dest = os.path.join(p.backup_dir, f"bdd_pubs_{stamp}.sqlite")
+    src = sqlite3.connect(p.db_path)
     dst = sqlite3.connect(dest)
     src.backup(dst)
     dst.close()
     src.close()
-    old = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("bdd_pubs_") and f.endswith(".sqlite"))
+    old = sorted(f for f in os.listdir(p.backup_dir) if f.startswith("bdd_pubs_") and f.endswith(".sqlite"))
     for f in old[:-keep]:
-        os.remove(os.path.join(BACKUP_DIR, f))
+        os.remove(os.path.join(p.backup_dir, f))
 
 
 def rows(cur):
@@ -214,10 +422,15 @@ def one(cur):
     return dict(r) if r else None
 
 
+def img_case():
+    pre = cur().prefix
+    return (f"CASE WHEN im.thumb IS NOT NULL THEN '{pre}/miniatures/' || im.thumb "
+            f"ELSE '{pre}/images/' || im.file END")
+
+
 def img_url(entity, id_expr):
     """Sous-requête : URL de l'image principale d'un élément."""
-    return (f"(SELECT CASE WHEN im.thumb IS NOT NULL THEN '/miniatures/' || im.thumb "
-            f"ELSE '/images/' || im.file END FROM images im "
+    return (f"(SELECT {img_case()} FROM images im "
             f"WHERE im.entity = '{entity}' AND im.entity_id = {id_expr} "
             f"ORDER BY im.sort, im.id LIMIT 1)")
 
@@ -424,8 +637,7 @@ def list_games(db, qs, gid=None):
           (SELECT MIN(NULLIF(i.date, '')) FROM appearances ap JOIN ads a ON a.id = ap.ad_id
              JOIN issues i ON i.id = ap.issue_id WHERE a.game_id = g.id) AS first_date,
           COALESCE({img_url('games', 'g.id')},
-            (SELECT CASE WHEN im.thumb IS NOT NULL THEN '/miniatures/' || im.thumb
-                    ELSE '/images/' || im.file END
+            (SELECT {img_case()}
              FROM images im JOIN ads a ON im.entity = 'ads' AND im.entity_id = a.id
              WHERE a.game_id = g.id ORDER BY im.sort, im.id LIMIT 1)) AS thumb_url
         FROM games g LEFT JOIN series s ON s.id = g.series_id {w}
@@ -540,9 +752,17 @@ def search(db, qs, limit=None, offset=0):
     return {"items": items, "stats": st}
 
 
+def with_urls(im):
+    if im:
+        pre = cur().prefix
+        im["url"] = f"{pre}/images/{im['file']}"
+        im["thumb_url"] = f"{pre}/miniatures/{im['thumb']}" if im.get("thumb") else im["url"]
+    return im
+
+
 def images_of(db, entity, eid):
-    return rows(db.execute(
-        "SELECT * FROM images WHERE entity = ? AND entity_id = ? ORDER BY sort, id", (entity, eid)))
+    return [with_urls(im) for im in rows(db.execute(
+        "SELECT * FROM images WHERE entity = ? AND entity_id = ? ORDER BY sort, id", (entity, eid)))]
 
 
 def detail(db, table, rid):
@@ -617,7 +837,7 @@ def delete_images(db, entity, eid):
 
 
 def remove_image_files(im):
-    for folder, name in ((IMG_DIR, im["file"]), (THUMB_DIR, im["thumb"])):
+    for folder, name in ((cur().img_dir, im["file"]), (cur().thumb_dir, im["thumb"])):
         if name:
             try:
                 os.remove(os.path.join(folder, name))
@@ -656,12 +876,12 @@ def save_image(db, body):
     thumb = decode_b64(body.get("thumb"))
     stem = f"{entity}{eid}_{uuid.uuid4().hex[:10]}"
     fname = f"{stem}.{ext}"
-    with open(os.path.join(IMG_DIR, fname), "wb") as f:
+    with open(os.path.join(cur().img_dir, fname), "wb") as f:
         f.write(data)
     tname = None
     if thumb:
         tname = f"{stem}.jpg"
-        with open(os.path.join(THUMB_DIR, tname), "wb") as f:
+        with open(os.path.join(cur().thumb_dir, tname), "wb") as f:
             f.write(thumb)
     sort = db.execute("SELECT COALESCE(MAX(sort), 0) + 1 FROM images WHERE entity = ? AND entity_id = ?",
                       (entity, eid)).fetchone()[0]
@@ -669,7 +889,7 @@ def save_image(db, body):
         "INSERT INTO images(entity, entity_id, file, thumb, original_name, caption, sort) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (entity, eid, fname, tname, name, str(body.get("caption") or ""), sort)).lastrowid
-    return one(db.execute("SELECT * FROM images WHERE id = ?", (iid,)))
+    return with_urls(one(db.execute("SELECT * FROM images WHERE id = ?", (iid,))))
 
 
 def dashboard(db):
@@ -767,7 +987,7 @@ def build_backup():
     """ZIP complet : base + images + miniatures. Renvoie le chemin du fichier temporaire."""
     tmpdir = tempfile.mkdtemp(prefix="bddpubs_")
     snap = os.path.join(tmpdir, "bdd_pubs.sqlite")
-    src = sqlite3.connect(DB_PATH)
+    src = sqlite3.connect(cur().db_path)
     dst = sqlite3.connect(snap)
     src.backup(dst)
     dst.close()
@@ -775,7 +995,8 @@ def build_backup():
     zpath = os.path.join(tmpdir, "sauvegarde.zip")
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(snap, "data/bdd_pubs.sqlite")
-        for folder, arc in ((IMG_DIR, "data/images"), (THUMB_DIR, "data/miniatures")):
+        z.writestr("data/projet.json", json.dumps({"nom": cur().name, "id": cur().id}, ensure_ascii=False))
+        for folder, arc in ((cur().img_dir, "data/images"), (cur().thumb_dir, "data/miniatures")):
             for f in os.listdir(folder):
                 z.write(os.path.join(folder, f), f"{arc}/{f}", compress_type=zipfile.ZIP_STORED)
     return tmpdir, zpath
@@ -784,6 +1005,23 @@ def build_backup():
 # ---------------------------------------------------------------------------
 # Données de démonstration (python app.py --demo, uniquement si la base est vide)
 # ---------------------------------------------------------------------------
+def demo_poster(title, desc, platform, n):
+    """Fausse affiche (SVG) pour illustrer le projet de démonstration."""
+    from xml.sax.saxutils import escape
+    bg = ["#1d3557", "#6a040f", "#1b4332", "#3c096c", "#7f5539"][n % 5]
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800" width="600" height="800">
+<rect width="600" height="800" fill="{bg}"/>
+<circle cx="480" cy="170" r="210" fill="#ffffff" opacity=".08"/>
+<circle cx="90" cy="640" r="160" fill="#ffffff" opacity=".06"/>
+<rect x="40" y="40" width="160" height="44" rx="8" fill="#ffffff" opacity=".9"/>
+<text x="120" y="70" font-family="sans-serif" font-size="22" font-weight="700" fill="{bg}" text-anchor="middle">DÉMO</text>
+<text x="300" y="420" font-family="sans-serif" font-size="46" font-weight="800" fill="#ffffff" text-anchor="middle">{escape(title)}</text>
+<text x="300" y="480" font-family="sans-serif" font-size="26" fill="#ffffff" opacity=".85" text-anchor="middle">{escape(desc)}</text>
+<rect x="0" y="700" width="600" height="100" fill="#000000" opacity=".35"/>
+<text x="300" y="762" font-family="sans-serif" font-size="30" font-weight="700" fill="#ffffff" text-anchor="middle">{escape(platform)}</text>
+</svg>"""
+
+
 def load_demo():
     db = connect()
     if db.execute("SELECT COUNT(*) FROM games").fetchone()[0]:
@@ -816,6 +1054,11 @@ def load_demo():
             ad = db.execute("INSERT INTO ads(game_id, description, pages, notes) VALUES (?,?,?,?)",
                             (gid[g], d, n, "DÉMO")).lastrowid
             set_ad_platforms(db, ad, [pid[x] for x in p.split("|")])
+            fname = f"ads{ad}_demo.svg"
+            with open(os.path.join(cur().img_dir, fname), "w", encoding="utf-8") as f:
+                f.write(demo_poster(g, d, p.replace("|", " / "), len(aid)))
+            db.execute("INSERT INTO images(entity, entity_id, file, original_name) VALUES ('ads', ?, ?, ?)",
+                       (ad, fname, "affiche de démonstration"))
             aid.append(ad)
         for m, num, date, page, ad, sale in (
                 ("Weekly Famitsu", "421", "1997-01-03", "12", 0, 1),
@@ -922,12 +1165,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": f"Erreur interne : {e}"}, 500)
 
     def static(self, path):
-        if path.startswith("/images/") or path.startswith("/miniatures/"):
-            folder = IMG_DIR if path.startswith("/images/") else THUMB_DIR
-            name = path.split("/", 2)[2]
-            if not SAFE_NAME.match(name):
-                raise ApiError(404, "Fichier introuvable")
-            return self.send_file(os.path.join(folder, name))
+        m = re.match(r"^/p/([a-z0-9-]+)(/.*)?$", path)
+        if m:
+            pid, path = m.group(1), m.group(2) or "/"
+            if path.startswith("/images/") or path.startswith("/miniatures/"):
+                p = open_project(pid)
+                folder = p.img_dir if path.startswith("/images/") else p.thumb_dir
+                name = path.split("/", 2)[2]
+                if not SAFE_NAME.match(name):
+                    raise ApiError(404, "Fichier introuvable")
+                return self.send_file(os.path.join(folder, name))
         if path in ("/", ""):
             path = "/index.html"
         name = path.lstrip("/")
@@ -939,6 +1186,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def api(self, method, route, qs):
         parts = route.split("/")
+        pid = self.headers.get("X-Projet") or qs.get("projet") or None
+        if parts[0] == "projets":
+            try:
+                use_project(project_by_id(pid))
+            except ApiError:  # onglet resté sur un projet supprimé
+                use_project(project_by_id(None))
+            return self.api_projects(method, parts, qs)
+        open_project(pid)
         db = connect()
         try:
             self.api_inner(db, method, parts, qs)
@@ -947,6 +1202,50 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(409, friendly_integrity(table, e))
         finally:
             db.close()
+
+    def api_projects(self, method, parts, qs):
+        current = cur().id
+        target = parts[1] if len(parts) > 1 and parts[1] else None
+        if method == "GET" and not target:
+            return self.send_json(projects_info(current))
+        if method == "POST" and not target:
+            body = self.read_json()
+            p = create_project(body.get("nom"), demo=bool(body.get("demo")))
+            return self.send_json({"id": p.id, "nom": p.name}, 201)
+        if method == "POST" and target == "import":
+            n = int(self.headers.get("Content-Length") or 0)
+            p = import_project(self.rfile, n, qs.get("nom", ""))
+            return self.send_json({"id": p.id, "nom": p.name}, 201)
+        if target and method == "GET" and len(parts) == 3 and parts[2] == "export.zip":
+            p = open_project(target)
+            tmpdir, zpath = build_backup()
+            try:
+                stamp = datetime.now().strftime("%Y%m%d-%H%M")
+                return self.send_file(zpath, "application/zip", cache=False,
+                                      download_name=f"bdd_pubs_{p.id}_{stamp}.zip")
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+        if target and method == "PUT":
+            body = self.read_json()
+            with REG_LOCK:
+                reg = load_registry()
+                if target not in reg["projets"]:
+                    raise ApiError(404, "Projet introuvable")
+                if "nom" in body:
+                    nom = str(body["nom"]).strip()
+                    if not nom:
+                        raise ApiError(400, "Donnez un nom au projet")
+                    if any(k != target and v["nom"].lower() == nom.lower() for k, v in reg["projets"].items()):
+                        raise ApiError(409, "Un projet porte déjà ce nom.")
+                    reg["projets"][target]["nom"] = nom
+                if body.get("defaut"):
+                    reg["defaut"] = target
+                save_registry(reg)
+            return self.send_json(projects_info(current))
+        if target and method == "DELETE":
+            delete_project(target)
+            return self.send_json({"ok": True})
+        raise ApiError(405, "Méthode non autorisée")
 
     def api_inner(self, db, method, parts, qs):
         head = parts[0]
@@ -1273,7 +1572,7 @@ def main(argv=None):
         print(f"Aucun port libre entre {args.port} et {args.port + 9}.")
         sys.exit(1)
 
-    init_db()
+    open_project(None)
     if args.demo:
         load_demo()
 

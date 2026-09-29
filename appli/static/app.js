@@ -31,7 +31,7 @@ function qs(obj) {
 
 const fmtPages = n => n == null || n === '' ? '' : String(n).replace('.', ',');
 const plural = (n, s, p) => `${n} ${n > 1 ? (p || s + 's') : s}`;
-const imgSrc = im => im.thumb ? '/miniatures/' + im.thumb : '/images/' + im.file;
+const imgSrc = im => im.thumb_url || im.url;
 const thumbImg = (url, cls = 'thumb-img') => url
   ? `<img class="${cls}" loading="lazy" src="${esc(url)}" alt="">`
   : `<div class="thumb-none" title="Pas d'image">▢</div>`;
@@ -41,8 +41,13 @@ const adLabel = a => `#${a.id} · ${a.game_title}${a.platform_name ? ' · ' + a.
 // ===========================================================================
 // API
 // ===========================================================================
+// Projet de cet onglet : /p/<id>/ dans l'adresse ; « / » = projet ouvert au lancement.
+const PROJ = (location.pathname.match(/^\/p\/([a-z0-9-]+)/) || [])[1] || '';
+const withProj = url => PROJ ? url + (url.includes('?') ? '&' : '?') + 'projet=' + encodeURIComponent(PROJ) : url;
+
 async function api(method, url, body) {
   const opt = { method, headers: {} };
+  if (PROJ) opt.headers['X-Projet'] = PROJ;
   if (body !== undefined) {
     opt.headers['Content-Type'] = 'application/json';
     opt.body = JSON.stringify(body);
@@ -428,7 +433,7 @@ function galleryBlock(images, { entity, entityId, onChange, dropText = 'Ajouter 
   if (images.length) {
     const g = el('div', 'gallery' + (big ? ' big' : ''));
     g.innerHTML = images.map((im, i) => `<figure data-i="${i}">
-        <img loading="${big && i === 0 ? 'eager' : 'lazy'}" src="${esc(big && i === 0 ? '/images/' + im.file : imgSrc(im))}" alt="${esc(im.original_name)}"
+        <img loading="${big && i === 0 ? 'eager' : 'lazy'}" src="${esc(big && i === 0 ? im.url : imgSrc(im))}" alt="${esc(im.original_name)}"
              onerror="if(!this.dataset.f){this.dataset.f=1;this.src='${esc(imgSrc(im))}'}">
         <figcaption>${i === 0 ? '<span class="badge">principale</span>' : '<button type="button" class="icon" data-act="main" title="Mettre en image principale">★</button>'}
         <button type="button" class="icon" data-act="del" title="Supprimer l'image">🗑</button></figcaption></figure>`).join('');
@@ -451,7 +456,7 @@ function galleryBlock(images, { entity, entityId, onChange, dropText = 'Ajouter 
           await DEL(`images/${im.id}`); invalidate(); onChange();
         }
       } else if (e.target.tagName === 'IMG') {
-        lightbox(images.map(x => ({ url: '/images/' + x.file, caption: x.original_name })), +fig.dataset.i);
+        lightbox(images.map(x => ({ url: x.url, caption: x.original_name })), +fig.dataset.i);
       }
     });
   }
@@ -792,7 +797,7 @@ function appTable(items, { hide = [], onChange = () => {}, emptyText = 'Aucune p
 // Clic sur une miniature de tableau : images d'origine de l'exemplaire puis de la pub
 async function openThumb(r) {
   const [d, ad] = await Promise.all([GET(`appearances/${r.id}`), GET(`ads/${r.ad_id}`)]);
-  const list = [...d.images, ...ad.images].map(im => ({ url: '/images/' + im.file, caption: im.original_name }));
+  const list = [...d.images, ...ad.images].map(im => ({ url: im.url, caption: im.original_name }));
   lightbox(list, 0);
 }
 
@@ -931,7 +936,7 @@ async function pageEntry(view, params) {
       lastItems = [];
       return;
     }
-    try { localStorage.setItem('bddpubs.saisie', JSON.stringify({ magazine_id: m.id, number: num })); } catch (_) { /* ignoré */ }
+    try { localStorage.setItem(`bddpubs.saisie.${PROJ || 'defaut'}`, JSON.stringify({ magazine_id: m.id, number: num })); } catch (_) { /* ignoré */ }
     const found = await GET(`issues?${qs({ magazine_id: m.id, number: num })}`);
     if (id !== reqId) return;
     $('#in-issue-title', view).textContent = `${m.name} n°${num}`;
@@ -995,7 +1000,7 @@ async function pageEntry(view, params) {
     const i = await GET(`issues/${params.issue}`);
     start = { magazine_id: i.magazine_id, number: i.number };
   } else {
-    try { start = JSON.parse(localStorage.getItem('bddpubs.saisie') || 'null'); } catch (_) { start = null; }
+    try { start = JSON.parse(localStorage.getItem(`bddpubs.saisie.${PROJ || 'defaut'}`) || 'null'); } catch (_) { start = null; }
   }
   if (start) {
     await mag.set(start.magazine_id, true);
@@ -1039,7 +1044,7 @@ async function pageSearch(view, params) {
   async function run(append = false) {
     const f = current();
     history.replaceState(null, '', '#/recherche' + (qs(f) ? '?' + qs(f) : ''));
-    $('#export', view).href = '/api/export/apparitions.csv?' + qs(f);
+    $('#export', view).href = '/api/export/apparitions.csv?' + qs({ ...f, projet: PROJ });
     if (!append) { offset = 0; items = []; }
     const res = await GET('search?' + qs({ ...f, limit: LIMIT, offset }));
     items = items.concat(res.items);
@@ -1362,10 +1367,12 @@ async function pageExport(view) {
       <div class="card"><h2>Exports Excel (CSV)</h2>
         <p class="muted">Fichiers CSV (séparateur « ; ») qui s'ouvrent directement dans Excel ou LibreOffice.
         Pour exporter une sélection précise, utilisez le bouton Export de la page <a href="#/recherche">Recherche</a>.</p>
-        <ul class="list-mini">${exports.map(([k, l]) => `<li><span class="grow">${l}</span><a class="btn" href="/api/export/${k}.csv">⬇ ${k}.csv</a></li>`).join('')}</ul></div>
+        <ul class="list-mini">${exports.map(([k, l]) => `<li><span class="grow">${l}</span><a class="btn" href="${withProj(`/api/export/${k}.csv`)}">⬇ ${k}.csv</a></li>`).join('')}</ul></div>
       <div class="card"><h2>Sauvegarde complète</h2>
         <p>Un fichier ZIP avec la base et toutes les images. À faire régulièrement et à garder ailleurs (clé USB, cloud…).</p>
-        <p><a class="btn primary" href="/api/sauvegarde.zip">⬇ Télécharger la sauvegarde</a></p>
+        <p><a class="btn primary" href="${withProj('/api/sauvegarde.zip')}">⬇ Télécharger la sauvegarde de ce projet</a></p>
+        <p class="muted">Pour exporter ou importer un projet en particulier, ou créer le projet de démonstration :
+        page <a href="#/projets">Projets</a> (menu 📁 en haut à gauche).</p>
         <h3 style="margin-top:18px">Où sont les données ?</h3>
         <p class="muted">Tout est dans le dossier <b>data</b> à côté de l'application : la base (<code>bdd_pubs.sqlite</code>),
         les images et leurs miniatures. Une copie de la base est aussi faite automatiquement à chaque démarrage
@@ -1397,6 +1404,123 @@ async function pageExport(view) {
   });
 }
 
+// ---------------------------------------------------------------------------
+const openProject = id => { location.href = `/p/${encodeURIComponent(id)}/#/`; };
+
+async function pageProjects(view) {
+  const info = await GET('projets');
+  const cur = info.projets.find(p => p.actuel);
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Projets</h1>
+      <div class="sub">Chaque projet est une base séparée (ses jeux, pubs, magazines et images).
+      Au lancement, l'application ouvre toujours le projet marqué « ouvert au lancement ».</div></div>
+      <div class="btns">
+        <button type="button" class="primary" id="new">＋ Nouveau projet</button>
+        <button type="button" id="demo">＋ Projet de démonstration</button>
+        <button type="button" id="import">⬆ Importer un projet (.zip)</button>
+        <input type="file" id="import-file" accept=".zip,application/zip" hidden>
+      </div></div>
+    <div class="card"><div class="table-wrap"><table class="data"><thead><tr><th>Projet</th><th>Contenu</th><th></th></tr></thead>
+      <tbody>${info.projets.map(p => `<tr data-id="${esc(p.id)}">
+        <td><b>${esc(p.nom)}</b>
+          ${p.actuel ? '<span class="badge">projet affiché</span>' : ''}
+          ${p.defaut ? '<span class="badge gray">ouvert au lancement</span>' : ''}</td>
+        <td class="muted">${p.stats ? `${plural(p.stats.ads, 'pub')} · ${plural(p.stats.appearances, 'parution')} · ${plural(p.stats.games, 'jeu', 'jeux')}` : 'base illisible'}</td>
+        <td class="row-actions">
+          ${p.actuel ? '' : '<button type="button" class="primary" data-act="open">Ouvrir</button>'}
+          <button type="button" data-act="rename">Renommer</button>
+          ${p.defaut ? '' : '<button type="button" data-act="default" title="Ouvrir ce projet au lancement de l\'application">★ Au lancement</button>'}
+          <a class="btn" href="/api/projets/${encodeURIComponent(p.id)}/export.zip" title="ZIP de ce projet seul (base + images)">⬇ Exporter</a>
+          ${p.protege || p.defaut ? '' : '<button type="button" class="danger" data-act="del">Supprimer</button>'}
+        </td></tr>`).join('')}</tbody></table></div></div>
+    <div class="card"><h2>Bon à savoir</h2><ul class="muted" style="margin:0;padding-left:18px">
+      <li><b>Exporter</b> crée un ZIP avec la base et les images du projet : pour le garder de côté, l'envoyer à quelqu'un,
+        ou le retrouver sur un autre ordinateur avec <b>Importer</b>.</li>
+      <li>Le <b>projet de démonstration</b> contient quelques exemples fictifs, pour essayer sans toucher à vos données.</li>
+      <li>Le projet de base (${esc(info.projets.find(p => p.protege).nom)}) ne peut pas être supprimé, mais peut être renommé.</li>
+      <li>Chaque onglet reste sur son projet : on peut en ouvrir deux côte à côte.</li></ul></div>`;
+
+  const ask = (title, value = '') => formModal({
+    title, values: { nom: value }, submitLabel: 'Valider',
+    fields: [{ name: 'nom', label: 'Nom du projet', required: true, wide: true }],
+    onSubmit: d => d,
+  });
+  $('#new', view).onclick = async () => {
+    const d = await ask('Nouveau projet');
+    if (!d) return;
+    const p = await POST('projets', { nom: d.nom });
+    toast(`Projet « ${p.nom} » créé`);
+    openProject(p.id);
+  };
+  $('#demo', view).onclick = async () => {
+    const existing = info.projets.filter(p => /^d[ée]mo/i.test(p.nom)).length;
+    const p = await POST('projets', { nom: existing ? `Démo ${existing + 1}` : 'Démo', demo: true });
+    toast(`Projet « ${p.nom} » créé`);
+    openProject(p.id);
+  };
+  const fileI = $('#import-file', view);
+  $('#import', view).onclick = () => fileI.click();
+  fileI.onchange = async () => {
+    const f = fileI.files[0];
+    fileI.value = '';
+    if (!f) return;
+    toast('Import en cours…');
+    const r = await fetch('/api/projets/import', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: f });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(data.error || `Erreur ${r.status}`, 'err');
+    toast(`Projet « ${data.nom} » importé`);
+    render();
+  };
+  view.addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const p = info.projets.find(x => x.id === b.closest('tr').dataset.id);
+    const act = b.dataset.act;
+    if (act === 'open') return openProject(p.id);
+    if (act === 'rename') {
+      const d = await ask('Renommer le projet', p.nom);
+      if (!d) return;
+      await PUT(`projets/${p.id}`, { nom: d.nom });
+    } else if (act === 'default') {
+      await PUT(`projets/${p.id}`, { defaut: true });
+      toast(`« ${p.nom} » s'ouvrira au lancement`);
+    } else if (act === 'del') {
+      if (!await confirmBox(`Supprimer définitivement le projet « ${p.nom} », ses données et ses images ? Pensez à l'exporter avant si besoin.`)) return;
+      await DEL(`projets/${p.id}`);
+      toast('Projet supprimé');
+    }
+    await drawProjectSwitcher();
+    render();
+  });
+}
+
+// Sélecteur de projet dans l'en-tête
+async function drawProjectSwitcher() {
+  const box = $('#proj');
+  let info;
+  try { info = await GET('projets'); } catch (_) { return; }
+  const cur = info.projets.find(p => p.actuel) || info.projets.find(p => p.defaut);
+  if (PROJ && !info.projets.some(p => p.id === PROJ)) {
+    box.innerHTML = '<a class="btn" href="/">Projet introuvable : revenir au projet principal</a>';
+    return;
+  }
+  box.innerHTML = `<button type="button" class="proj-btn ${cur.defaut ? '' : 'other'}" title="Changer de projet">
+      📁 <b>${esc(cur.nom)}</b> ▾</button>
+    <div class="proj-menu" hidden>
+      ${info.projets.map(p => `<button type="button" data-id="${esc(p.id)}" class="${p.actuel ? 'sel' : ''}">${p.actuel ? '✓ ' : ''}${esc(p.nom)}
+        ${p.defaut ? '<small class="muted">(lancement)</small>' : ''}</button>`).join('')}
+      <a href="#/projets">Gérer les projets…</a></div>`;
+  document.title = cur.defaut ? 'BDD Pubs' : `BDD Pubs · ${cur.nom}`;
+  const menu = $('.proj-menu', box);
+  $('.proj-btn', box).onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+  menu.onclick = e => {
+    const b = e.target.closest('button[data-id]');
+    menu.hidden = true;
+    if (b && !b.classList.contains('sel')) openProject(b.dataset.id);
+  };
+}
+document.addEventListener('click', () => { const m = $('.proj-menu'); if (m) m.hidden = true; });
+
 // ===========================================================================
 // Routeur
 // ===========================================================================
@@ -1413,6 +1537,7 @@ const ROUTES = [
   [/^\/numeros\/(\d+)$/, pageIssue, 'magazines'],
   [/^\/listes$/, pageLists, 'listes'],
   [/^\/export$/, pageExport, 'export'],
+  [/^\/projets$/, pageProjects, 'projets'],
 ];
 
 let renderToken = 0;
@@ -1439,6 +1564,7 @@ async function render() {
 }
 window.addEventListener('hashchange', render);
 render();
+drawProjectSwitcher();
 
 // ===========================================================================
 // Présence : signale au serveur que l'onglet est ouvert. Quand le dernier

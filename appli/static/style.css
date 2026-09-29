@@ -328,3 +328,19 @@ header.top .quit:hover { color: var(--no); }
 .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .chip.create { color: var(--accent); border-style: dashed; }
 .picked { font-size: 12px; margin-top: 6px; }
+
+/* ---------- Projets ---------- */
+.proj { position: relative; }
+.proj-btn { padding: 5px 11px; font-size: 13px; }
+.proj-btn.other { background: var(--warn-soft); border-color: #d9a400; }
+.proj-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 70; min-width: 240px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
+  padding: 4px; display: flex; flex-direction: column;
+}
+.proj-menu[hidden] { display: none; }
+.proj-menu button { border: none; background: none; justify-content: flex-start; padding: 7px 10px; }
+.proj-menu button:hover { background: var(--panel-2); }
+.proj-menu button.sel { font-weight: 700; }
+.proj-menu a { padding: 7px 10px; border-top: 1px solid var(--line); margin-top: 4px; }
+table.data td.row-actions .btn, table.data td.row-actions button:not(.icon) { padding: 4px 9px; font-size: 13px; }

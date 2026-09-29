@@ -51,6 +51,11 @@ jobs:
           if ($page.Content -notmatch "BDD Pubs") { throw "Interface introuvable" }
           $js = Invoke-WebRequest "http://127.0.0.1:8765/app.js" -UseBasicParsing
           if ($js.StatusCode -ne 200) { throw "app.js introuvable" }
+          $proj = Invoke-WebRequest "http://127.0.0.1:8765/api/projets" -Method Post -Body '{"nom":"Démo","demo":true}' -ContentType "application/json; charset=utf-8" -UseBasicParsing | ConvertFrom-Json
+          $ads = Invoke-WebRequest "http://127.0.0.1:8765/api/ads" -Headers @{ "X-Projet" = $proj.id } -UseBasicParsing | ConvertFrom-Json
+          if ($ads.Count -lt 1) { throw "Projet de démonstration vide" }
+          $img = Invoke-WebRequest ("http://127.0.0.1:8765" + $ads[0].thumb_url) -UseBasicParsing
+          if ($img.StatusCode -ne 200) { throw "Image de démo introuvable" }
           Invoke-WebRequest "http://127.0.0.1:8765/api/quitter" -Method Post -Body "{}" -ContentType "application/json" -UseBasicParsing | Out-Null
           if (-not $p.WaitForExit(15000)) { Stop-Process $p -Force; throw "Le bouton Quitter n'arrête pas l'application" }
           Write-Host "OK : l'exécutable démarre, sert l'interface et s'arrête proprement."

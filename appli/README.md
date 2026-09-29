@@ -71,6 +71,19 @@ choisit l'image principale.
 Dans la saisie rapide : taper le nom du jeu dans « Pub » → `Entrée` pour choisir → `Tab` →
 page → `Entrée` pour enregistrer. Le magazine et le numéro restent en place pour la pub suivante.
 
+## Projets
+
+Menu **📁** en haut à gauche. Au lancement, l'application ouvre toujours le même projet
+(au départ : « Projet principal », renommable) ; rien à choisir.
+
+Page **Projets** : créer un projet vide, créer le **projet de démonstration** (exemples fictifs,
+avec affiches), renommer, choisir le projet ouvert au lancement, **exporter** un projet seul
+(ZIP : base + images), **importer** un ZIP exporté (ou une sauvegarde complète), supprimer un
+projet (sauf le projet de base). Chaque onglet reste sur son projet (adresse `/p/<projet>/`).
+
+Sur le disque : le projet de base est directement dans `data/`, les autres dans
+`data/projets/<projet>/`, la liste dans `data/projets.json`.
+
 ## Utiliser le téléphone pour prendre les pubs en photo
 
 Page **Export** > cocher « Rendre l'application accessible depuis le téléphone ». L'adresse à
@@ -91,7 +104,7 @@ lancements suivants. (Pas de mot de passe : à n'activer que sur un réseau de c
 - `app.py` : serveur Python, bibliothèque standard uniquement ; base SQLite `data/bdd_pubs.sqlite`.
 - `static/` : l'interface (HTML/CSS/JavaScript, sans dépendance ni connexion Internet).
 - Options : `--port 8766`, `--no-browser` (et pas d'arrêt automatique), `--sans-arret-auto`,
-  `--reseau`, `--demo` (données d'exemple si la base est vide).
+  `--reseau`, `--demo` (données d'exemple dans le projet ouvert au lancement, s'il est vide).
   Variable `BDD_PUBS_DATA` pour placer les données ailleurs. Sans fenêtre (`.pyw` / `.exe`), les
   messages vont dans `data/journal.txt`.
 - L'exécutable Windows est construit par `.github/workflows/executable-windows.yml` (PyInstaller),
