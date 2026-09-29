@@ -344,3 +344,9 @@ header.top .quit:hover { color: var(--no); }
 .proj-menu button.sel { font-weight: 700; }
 .proj-menu a { padding: 7px 10px; border-top: 1px solid var(--line); margin-top: 4px; }
 table.data td.row-actions .btn, table.data td.row-actions button:not(.icon) { padding: 4px 9px; font-size: 13px; }
+
+.update-bar {
+  position: sticky; top: 0; z-index: 30; display: flex; gap: 12px; align-items: center; justify-content: center;
+  padding: 8px 16px; background: var(--warn-soft); border-bottom: 1px solid #d9a400; font-weight: 600;
+}
+.update-bar button { padding: 4px 12px; }

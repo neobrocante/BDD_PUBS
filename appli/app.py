@@ -45,6 +45,30 @@ else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(HERE, "static")
 DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
+
+APP_VERSION = "2026.09.29"
+
+
+def build_id():
+    """Identifiant de cette version précise (change à chaque mise à jour de l'appli)."""
+    import hashlib
+    h = hashlib.sha1(APP_VERSION.encode())
+    if FROZEN:  # l'exécutable contient tout (ses fichiers internes sont redécompressés à chaque lancement)
+        sources = [sys.executable]
+    else:
+        sources = [os.path.abspath(__file__)]
+        for root, _dirs, files in os.walk(STATIC_DIR):
+            sources += [os.path.join(root, f) for f in sorted(files)]
+    for path in sources:
+        try:
+            st = os.stat(path)
+            h.update(f"{os.path.basename(path)}:{st.st_size}:{int(st.st_mtime)}".encode())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
+BUILD = build_id()
 # Projets : le projet de base (« principal ») est à la racine de data/,
 # les projets supplémentaires dans data/projets/<id>/ (même organisation).
 REGISTRY_PATH = os.path.join(DATA_DIR, "projets.json")
@@ -1256,7 +1280,8 @@ class Handler(BaseHTTPRequestHandler):
         if head == "ping":
             if method == "POST":
                 PRESENCE.ping(self.read_json().get("tab", "?"))
-            return self.send_json({"app": "bdd_pubs", "ok": True})
+            return self.send_json({"app": "bdd_pubs", "ok": True, "version": APP_VERSION, "build": BUILD,
+                                   "data": os.path.realpath(DATA_DIR)})
         if head == "bye" and method == "POST":
             PRESENCE.bye(self.read_json().get("tab", "?"))
             return self.send_json({"ok": True})
@@ -1515,13 +1540,31 @@ def watchdog(httpd, auto_stop):
     httpd.shutdown()
 
 
-def is_our_app(port):
+def running_instance(port):
+    """Infos de l'application BDD Pubs qui tourne déjà sur ce port (ou None)."""
     import urllib.request
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1.5) as r:
-            return json.loads(r.read().decode("utf-8")).get("app") == "bdd_pubs"
+            info = json.loads(r.read().decode("utf-8"))
+            return info if info.get("app") == "bdd_pubs" else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def ask_to_quit(port):
+    """Demande à une autre version de l'appli de s'arrêter ; attend que le port se libère."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/quitter", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3).read()
     except Exception:  # noqa: BLE001
         return False
+    for _ in range(40):
+        time.sleep(0.25)
+        if running_instance(port) is None:
+            return True
+    return False
 
 
 def lan_ip():
@@ -1554,14 +1597,21 @@ def main(argv=None):
         log = open(os.path.join(DATA_DIR, "journal.txt"), "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stderr = log
 
-    # Déjà lancée ? On rouvre simplement l'onglet.
+    # Déjà lancée ? Même version : on rouvre simplement l'onglet.
+    # Autre version (mise à jour) ou autre dossier : on lui demande de s'arrêter et on prend sa place.
     port = None
     for p in range(args.port, args.port + 10):
-        if is_our_app(p):
-            print(f"BDD Pubs tourne déjà sur le port {p} : ouverture du navigateur.")
-            if not args.no_browser:
-                webbrowser.open(f"http://localhost:{p}")
-            return
+        other = running_instance(p)
+        if other:
+            same = other.get("build") == BUILD and other.get("data") == os.path.realpath(DATA_DIR)
+            if same:
+                print(f"BDD Pubs tourne déjà sur le port {p} : ouverture du navigateur.")
+                if not args.no_browser:
+                    webbrowser.open(f"http://localhost:{p}")
+                return
+            print(f"Une autre version de BDD Pubs tourne sur le port {p} : arrêt de celle-ci.")
+            if not ask_to_quit(p):
+                continue
         try:
             httpd = Server(("0.0.0.0" if args.reseau else "127.0.0.1", p), Handler)
             port = p

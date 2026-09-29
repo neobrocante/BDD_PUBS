@@ -1572,6 +1572,7 @@ drawProjectSwitcher();
 // ===========================================================================
 const TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let stoppedShown = false;
+let SERVER_BUILD = null;
 
 function showStopped(text) {
   if (stoppedShown) return;
@@ -1590,7 +1591,16 @@ async function heartbeat() {
     const r = await fetch('/api/ping', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tab: TAB_ID }),
     });
-    await r.text(); // lire la réponse libère la connexion
+    const info = await r.json().catch(() => ({})); // lire la réponse libère la connexion
+    if (info.build) {
+      if (!SERVER_BUILD) SERVER_BUILD = info.build;
+      else if (info.build !== SERVER_BUILD && !$('.update-bar')) {
+        const bar = el('div', 'update-bar', `Une nouvelle version de BDD Pubs a été lancée.
+          <button type="button" class="primary">Recharger la page</button>`);
+        $('button', bar).onclick = () => location.reload();
+        document.body.prepend(bar);
+      }
+    }
     return r.ok;
   } catch (_) {
     showStopped('Relancez « BDD Pubs » (double-clic), puis cliquez sur Réessayer. Vous pouvez aussi fermer cet onglet.');
