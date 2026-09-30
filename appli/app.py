@@ -45,7 +45,7 @@ else:
     STATIC_DIR = os.path.join(HERE, "static")
 DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
 
-APP_VERSION = "2026.09.30"
+APP_VERSION = "2026.09.30b"
 
 
 def build_id():
@@ -363,6 +363,9 @@ def import_project(stream, length, name):
             raise ApiError(400, "Ce fichier n'est pas un ZIP valide.")
         with z:
             names = z.namelist()
+            if FULL_MARKER in names:
+                raise ApiError(400, "C'est une sauvegarde complète (tous les projets) : "
+                                    "utilisez « Tout restaurer » dans la page Projets.")
             dbs = sorted((n for n in names if n.endswith("bdd_pubs.sqlite") and "sauvegardes/" not in n), key=len)
             if not dbs:
                 raise ApiError(400, "Ce ZIP ne contient pas de projet BDD Pubs (bdd_pubs.sqlite introuvable).")
@@ -1035,6 +1038,136 @@ def build_backup():
 
 
 # ---------------------------------------------------------------------------
+# Sauvegarde complète : tous les projets (bases + images) dans un seul ZIP,
+# avec la même organisation que le dossier data/. « Tout restaurer » la remet en place.
+# ---------------------------------------------------------------------------
+FULL_MARKER = "data/bdd_pubs_sauvegarde_complete.json"
+FULL_MEMBER = re.compile(
+    r"^data/(?:projets/(?P<pid>[a-z0-9-]+)/)?(?:bdd_pubs\.sqlite|projet\.json|(?:images|miniatures)/[A-Za-z0-9_.-]+)$")
+
+
+def export_all(zpath):
+    """Écrit dans zpath le ZIP de tous les projets. Copies cohérentes des bases (API de sauvegarde SQLite)."""
+    reg = load_registry()
+    tmpdir = tempfile.mkdtemp(prefix="bddpubs_tout_")
+    try:
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(FULL_MARKER, json.dumps({"type": "sauvegarde complète", "version": APP_VERSION,
+                                                "date": datetime.now().isoformat(timespec="seconds"),
+                                                "projets": len(reg["projets"])}, ensure_ascii=False))
+            z.writestr("data/projets.json", json.dumps(reg, ensure_ascii=False, indent=2))
+            for pid, info in reg["projets"].items():
+                p = project_by_id(pid)
+                arc = "data/" + (f"{info['dossier']}/" if info["dossier"] else "")
+                if os.path.exists(p.db_path):
+                    snap = os.path.join(tmpdir, f"{pid}.sqlite")
+                    src = sqlite3.connect(p.db_path)
+                    dst = sqlite3.connect(snap)
+                    src.backup(dst)
+                    dst.close()
+                    src.close()
+                    z.write(snap, arc + "bdd_pubs.sqlite")
+                for folder, sub in ((p.img_dir, "images"), (p.thumb_dir, "miniatures")):
+                    if os.path.isdir(folder):
+                        for f in os.listdir(folder):
+                            z.write(os.path.join(folder, f), f"{arc}{sub}/{f}", compress_type=zipfile.ZIP_STORED)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def save_stream(stream, length, path):
+    with open(path, "wb") as f:
+        left = length
+        while left > 0:
+            chunk = stream.read(min(1 << 20, left))
+            if not chunk:
+                break
+            f.write(chunk)
+            left -= len(chunk)
+
+
+def _remove(path):
+    """Suppression tolérante (Windows peut garder un fichier ouvert un court instant)."""
+    for _ in range(20):
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            elif os.path.exists(path):
+                os.remove(path)
+            return
+        except OSError:
+            time.sleep(0.25)
+    raise ApiError(409, f"Impossible de remplacer {os.path.basename(path)} : fichier utilisé. Réessayez.")
+
+
+def restore_all(stream, length):
+    """Remplace TOUTES les données par une sauvegarde complète (après une copie de sécurité)."""
+    if length <= 0:
+        raise ApiError(400, "Fichier vide")
+    work = tempfile.mkdtemp(prefix="bddpubs_restau_")
+    try:
+        zpath = os.path.join(work, "restauration.zip")
+        save_stream(stream, length, zpath)
+        try:
+            z = zipfile.ZipFile(zpath)
+        except zipfile.BadZipFile:
+            raise ApiError(400, "Ce fichier n'est pas un ZIP valide.")
+        with z:
+            names = z.namelist()
+            if FULL_MARKER not in names or "data/projets.json" not in names:
+                raise ApiError(400, "Ce ZIP n'est pas une sauvegarde complète (« Tout exporter »). "
+                                    "Pour un seul projet, utilisez « Importer un projet ».")
+            try:
+                reg = json.loads(z.read("data/projets.json").decode("utf-8"))
+                assert isinstance(reg.get("projets"), dict)
+            except (ValueError, AssertionError):
+                raise ApiError(400, "Liste des projets illisible dans la sauvegarde.")
+            staging = os.path.join(work, "data")
+            for n in names:
+                m = FULL_MEMBER.match(n)
+                if not m:
+                    continue  # tout le reste est ignoré (chemins inattendus compris)
+                dest = os.path.join(staging, *n.split("/")[1:])
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as f:
+                    f.write(z.read(n))
+        # contrôle : chaque projet listé a une base lisible
+        for pid, info in reg["projets"].items():
+            if not re.fullmatch(r"[a-z0-9-]+", pid) or (info.get("dossier") not in ("", f"projets/{pid}")):
+                raise ApiError(400, "Sauvegarde invalide (dossier de projet inattendu).")
+            dbp = os.path.join(staging, info["dossier"], "bdd_pubs.sqlite") if info["dossier"] else \
+                os.path.join(staging, "bdd_pubs.sqlite")
+            if os.path.exists(dbp):
+                try:
+                    db = sqlite3.connect(dbp)
+                    db.execute("SELECT COUNT(*) FROM ads").fetchone()
+                    db.close()
+                except sqlite3.Error:
+                    raise ApiError(400, f"La base du projet « {info.get('nom', pid)} » est illisible.")
+        with REG_LOCK:
+            # 1. copie de sécurité de l'existant
+            safety_dir = os.path.join(DATA_DIR, "sauvegardes")
+            os.makedirs(safety_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            safety = os.path.join(safety_dir, f"avant_restauration_{stamp}.zip")
+            export_all(safety)
+            # 2. remplacement (réglages, journal et sauvegardes sont conservés)
+            for name in ("bdd_pubs.sqlite", "images", "miniatures", "projets", "projets.json"):
+                _remove(os.path.join(DATA_DIR, name))
+            for name in ("bdd_pubs.sqlite", "images", "miniatures", "projets", "projets.json"):
+                src = os.path.join(staging, name)
+                if os.path.exists(src):
+                    shutil.move(src, os.path.join(DATA_DIR, name))
+            if not os.path.exists(REGISTRY_PATH):
+                save_registry(reg)
+            OPENED.clear()
+        open_project(None)  # base de lancement prête (dossiers, mise à jour éventuelle)
+        return {"projets": len(reg["projets"]), "securite": os.path.relpath(safety, DATA_DIR)}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Données de démonstration (python app.py --demo, uniquement si la base est vide)
 # ---------------------------------------------------------------------------
 def demo_poster(title, desc, platform, n):
@@ -1244,6 +1377,19 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_json()
             p = create_project(body.get("nom"), demo=bool(body.get("demo")))
             return self.send_json({"id": p.id, "nom": p.name}, 201)
+        if method == "GET" and target == "tout.zip":
+            tmpdir = tempfile.mkdtemp(prefix="bddpubs_")
+            try:
+                zpath = os.path.join(tmpdir, "tout.zip")
+                export_all(zpath)
+                stamp = datetime.now().strftime("%Y%m%d-%H%M")
+                return self.send_file(zpath, "application/zip", cache=False,
+                                      download_name=f"bdd_pubs_TOUT_{stamp}.zip")
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+        if method == "POST" and target == "restaurer":
+            n = int(self.headers.get("Content-Length") or 0)
+            return self.send_json(restore_all(self.rfile, n))
         if method == "POST" and target == "import":
             n = int(self.headers.get("Content-Length") or 0)
             p = import_project(self.rfile, n, qs.get("nom", ""))

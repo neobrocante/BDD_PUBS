@@ -107,6 +107,17 @@ projet (sauf le projet de base). Chaque onglet reste sur son projet (adresse `/p
 Sur le disque : le projet de base est directement dans `data/`, les autres dans
 `data/projets/<projet>/`, la liste dans `data/projets.json`.
 
+## Mettre à jour, changer d'ordinateur
+
+- **Mettre à jour** : dézipper la nouvelle version par-dessus l'ancienne (ou remplacer
+  `BDD Pubs.exe`). Le ZIP téléchargé ne contient **jamais** de données : le dossier `data`
+  (base, photos, projets) n'est pas touché.
+- **Tout exporter** (page Projets) : un seul ZIP avec tous les projets et toutes les photos.
+- **Tout restaurer** (page Projets) : remet tout exactement comme dans ce ZIP (projets, noms,
+  projet de lancement, photos). Les données actuelles sont d'abord copiées dans
+  `data/sauvegardes/avant_restauration_….zip` (lui-même restaurable).
+- **Importer un projet** : ajoute un projet exporté seul, à côté des projets existants.
+
 ## Utiliser le téléphone pour prendre les pubs en photo
 
 Page **Export** > cocher « Rendre l'application accessible depuis le téléphone ». L'adresse à

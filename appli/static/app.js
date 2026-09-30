@@ -1548,6 +1548,18 @@ async function pageProjects(view) {
           <a class="btn" href="/api/projets/${encodeURIComponent(p.id)}/export.zip" title="ZIP de ce projet seul (base + images)">⬇ Exporter</a>
           ${p.protege || p.defaut ? '' : '<button type="button" class="danger" data-act="del">Supprimer</button>'}
         </td></tr>`).join('')}</tbody></table></div></div>
+    <div class="card"><h2>Sauvegarde complète (tous les projets)</h2>
+      <p class="muted" style="margin-top:0">Un seul fichier ZIP avec <b>tous les projets et toutes leurs photos</b>.
+      À garder en lieu sûr (clé USB, cloud…), et pour changer d'ordinateur : « Tout exporter » sur l'ancien,
+      « Tout restaurer » sur le nouveau, et tout revient exactement comme avant.</p>
+      <div class="btns">
+        <a class="btn primary" href="/api/projets/tout.zip">⬇ Tout exporter</a>
+        <button type="button" id="restore">⬆ Tout restaurer…</button>
+        <input type="file" id="restore-file" accept=".zip,application/zip" hidden>
+      </div>
+      <p class="muted" style="margin-bottom:0"><b>Mettre à jour l'application ne touche pas aux données</b> :
+      le programme téléchargé ne contient jamais de dossier <code>data</code>. Il suffit de remplacer l'ancien
+      programme par le nouveau, en laissant le dossier <code>data</code> à côté de <code>BDD Pubs.exe</code>.</p></div>
     <div class="card"><h2>Bon à savoir</h2><ul class="muted" style="margin:0;padding-left:18px">
       <li><b>Exporter</b> crée un ZIP avec la base et les images du projet : pour le garder de côté, l'envoyer à quelqu'un,
         ou le retrouver sur un autre ordinateur avec <b>Importer</b>.</li>
@@ -1585,6 +1597,24 @@ async function pageProjects(view) {
     if (!r.ok) return toast(data.error || `Erreur ${r.status}`, 'err');
     toast(`Projet « ${data.nom} » importé`);
     render();
+  };
+  const restoreI = $('#restore-file', view);
+  $('#restore', view).onclick = async () => {
+    if (!await confirmBox('Tout restaurer remplace TOUTES les données actuelles (tous les projets et leurs photos) '
+      + 'par celles de la sauvegarde choisie. Une copie de sécurité des données actuelles est faite avant, '
+      + 'dans data/sauvegardes. Continuer ?', 'Choisir la sauvegarde…')) return;
+    restoreI.click();
+  };
+  restoreI.onchange = async () => {
+    const f = restoreI.files[0];
+    restoreI.value = '';
+    if (!f) return;
+    toast('Restauration en cours…');
+    const r = await fetch('/api/projets/restaurer', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: f });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(data.error || `Erreur ${r.status}`, 'err');
+    toast(`Restauration terminée : ${plural(data.projets, 'projet')}. Copie de sécurité : ${data.securite}`);
+    setTimeout(() => { history.replaceState(null, '', '/#/projets'); location.reload(); }, 1500);
   };
   view.addEventListener('click', async e => {
     const b = e.target.closest('button[data-act]');

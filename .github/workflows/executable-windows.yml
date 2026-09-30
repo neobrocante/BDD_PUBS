@@ -99,6 +99,10 @@ jobs:
           New-Item -ItemType Directory -Force paquet_dossier | Out-Null
           Copy-Item "appli\dist_dossier\BDD Pubs" paquet_dossier\ -Recurse
           $lisez | Out-File -Encoding utf8 "paquet_dossier\BDD Pubs\LISEZMOI.txt"
+          # garantie : le paquet ne contient jamais de données (mettre à jour ne doit rien écraser)
+          $fuite = Get-ChildItem -Recurse paquet_fichier, paquet_dossier | Where-Object { $_.Name -in @("data", "bdd_pubs.sqlite", "projets.json") }
+          if ($fuite) { $fuite | ForEach-Object { Write-Host $_.FullName }; throw "Des données se sont glissées dans le paquet" }
+          Write-Host "OK : aucun dossier data dans les paquets."
 
       - uses: actions/upload-artifact@v4
         with:
@@ -125,7 +129,7 @@ jobs:
           - **BDD-Pubs-Windows-dossier.zip** (conseillé) : dézipper, puis double-cliquer sur « BDD Pubs.exe » dans le dossier « BDD Pubs ».
           - **BDD-Pubs-Windows.zip** : un seul fichier « BDD Pubs.exe ».
 
-          Mise à jour : remplacer l'ancien programme, en gardant le dossier « data » à côté de « BDD Pubs.exe ».
+          Mise à jour : dézipper par-dessus l'ancienne version (ou remplacer le programme). Le ZIP ne contient aucune donnée : le dossier « data » (base, photos, projets) n'est pas touché.
           1er lancement : si Windows affiche « Windows a protégé votre ordinateur », cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
           "@
           # remplace la release précédente (absente la 1re fois : on ignore l'erreur)
