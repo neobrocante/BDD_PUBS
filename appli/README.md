@@ -48,10 +48,13 @@ Ouvrir). Ou, dans un terminal : `python3 app.py`.
 
 ### Arrêt
 
-Rien à faire : **l'application s'arrête toute seule quand on ferme son dernier onglet**
-(quelques secondes après ; recharger la page ou ouvrir un 2e onglet ne l'arrête pas).
-On peut aussi cliquer sur **⏻ Quitter** en haut à droite.
-Double-cliquer alors qu'elle tourne déjà rouvre simplement l'onglet.
+L'application **reste lancée** (en arrière-plan, sans fenêtre) jusqu'à ce qu'on clique sur
+**⏻ Quitter** en haut à droite, ou jusqu'à l'arrêt de l'ordinateur. On peut donc fermer l'onglet
+et revenir plus tard directement sur <http://localhost:8765> (le garder en favori).
+Au repos, elle ne consomme quasiment rien (environ 30 Mo de mémoire).
+
+Double-cliquer alors qu'elle tourne déjà rouvre simplement l'onglet. Si une page est restée
+ouverte pendant que l'application était arrêtée, elle se reconnecte toute seule dès la relance.
 
 ## Ce qu'on peut faire
 
@@ -123,7 +126,7 @@ lancements suivants. (Pas de mot de passe : à n'activer que sur un réseau de c
 
 - `app.py` : serveur Python, bibliothèque standard uniquement ; base SQLite `data/bdd_pubs.sqlite`.
 - `static/` : l'interface (HTML/CSS/JavaScript, sans dépendance ni connexion Internet).
-- Options : `--port 8766`, `--no-browser` (et pas d'arrêt automatique), `--sans-arret-auto`,
+- Options : `--port 8766`, `--no-browser`, `--arret-auto` (s'arrêter quand plus aucun onglet n'est ouvert),
   `--reseau`, `--demo` (données d'exemple dans le projet ouvert au lancement, s'il est vide).
   Variable `BDD_PUBS_DATA` pour placer les données ailleurs. Sans fenêtre (`.pyw` / `.exe`), les
   messages vont dans `data/journal.txt`.

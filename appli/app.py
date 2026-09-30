@@ -45,7 +45,7 @@ else:
     STATIC_DIR = os.path.join(HERE, "static")
 DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
 
-APP_VERSION = "2026.09.29c"
+APP_VERSION = "2026.09.30"
 
 
 def build_id():
@@ -1590,12 +1590,12 @@ def lan_ip():
 def main(argv=None):
     ap = argparse.ArgumentParser(description="BDD Pubs : application locale")
     ap.add_argument("--port", type=int, default=int(os.environ.get("BDD_PUBS_PORT", 8765)))
-    ap.add_argument("--no-browser", action="store_true",
-                    help="ne pas ouvrir le navigateur (et pas d'arrêt automatique)")
+    ap.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur")
     ap.add_argument("--reseau", action="store_true",
                     help="accessible depuis les autres appareils du réseau local (téléphone...)")
-    ap.add_argument("--sans-arret-auto", action="store_true",
-                    help="ne pas s'arrêter quand le dernier onglet est fermé")
+    ap.add_argument("--arret-auto", action="store_true",
+                    help="s'arrêter quand plus aucun onglet n'est ouvert (par défaut : seulement avec « Quitter »)")
+    ap.add_argument("--sans-arret-auto", action="store_true", help=argparse.SUPPRESS)  # ancien réglage, sans effet
     ap.add_argument("--demo", action="store_true", help="charger des données d'exemple si la base est vide")
     args = ap.parse_args(argv)
 
@@ -1635,7 +1635,9 @@ def main(argv=None):
         load_demo()
 
     url = f"http://localhost:{port}"
-    auto_stop = not (args.no_browser or args.sans_arret_auto)
+    # Par défaut l'application reste lancée jusqu'au bouton « Quitter » (ou l'arrêt du PC) :
+    # un onglet en arrière-plan est mis en sommeil par le navigateur, ce n'est pas un signe de fermeture.
+    auto_stop = args.arret_auto and not args.no_browser
     print("=" * 60)
     print(f"  BDD Pubs est lancée : {url}")
     if args.reseau and lan_ip():
@@ -1644,7 +1646,7 @@ def main(argv=None):
     if auto_stop:
         print("  S'arrête toute seule quand on ferme le dernier onglet.")
     else:
-        print("  Pour arrêter : fermer cette fenêtre (ou Ctrl+C)")
+        print("  Pour arrêter : bouton « Quitter » dans l'application (ou Ctrl+C ici)")
     print("=" * 60)
     NETWORK.port, NETWORK.always = port, args.reseau
     if load_settings().get("reseau") and not args.reseau:

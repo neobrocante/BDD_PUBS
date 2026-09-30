@@ -1682,23 +1682,33 @@ render();
 drawProjectSwitcher();
 
 // ===========================================================================
-// Présence : signale au serveur que l'onglet est ouvert. Quand le dernier
-// onglet est fermé, le serveur s'arrête tout seul.
+// Présence : vérifie régulièrement que l'application tourne (et si une nouvelle
+// version a été lancée). Elle ne s'arrête qu'avec le bouton « Quitter ».
 // ===========================================================================
 const TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 let stoppedShown = false;
 let SERVER_BUILD = null;
 
+let stoppedOverlay = null, reconnectTimer = null;
 function showStopped(text) {
   if (stoppedShown) return;
   stoppedShown = true;
-  const ov = el('div', 'overlay stopped', `<div class="modal"><header><h2>BDD Pubs est arrêtée</h2></header>
+  stoppedOverlay = el('div', 'overlay stopped', `<div class="modal"><header><h2>BDD Pubs est arrêtée</h2></header>
     <div class="modal-body"><p style="margin-top:0">${esc(text)}</p>
+    <p class="muted">Dès que l'application est relancée, cette page se reconnecte toute seule.</p>
     <div class="actions"><button type="button" class="primary" data-retry>Réessayer</button></div></div></div>`);
-  $('[data-retry]', ov).onclick = async () => {
-    if (await heartbeat()) { ov.remove(); stoppedShown = false; render(); }
-  };
-  document.body.append(ov);
+  $('[data-retry]', stoppedOverlay).onclick = () => heartbeat();
+  document.body.append(stoppedOverlay);
+  reconnectTimer = setInterval(() => heartbeat(), 5000); // reconnexion automatique
+}
+function hideStopped() {
+  if (!stoppedShown) return;
+  stoppedShown = false;
+  clearInterval(reconnectTimer);
+  stoppedOverlay.remove();
+  invalidate();
+  render();
+  drawProjectSwitcher();
 }
 
 async function heartbeat() {
@@ -1716,9 +1726,10 @@ async function heartbeat() {
         document.body.prepend(bar);
       }
     }
+    if (r.ok) hideStopped();
     return r.ok;
   } catch (_) {
-    showStopped('Relancez « BDD Pubs » (double-clic), puis cliquez sur Réessayer. Vous pouvez aussi fermer cet onglet.');
+    showStopped('Pour la relancer : double-clic sur « BDD Pubs ».');
     return false;
   }
 }
@@ -1730,7 +1741,9 @@ window.addEventListener('pagehide', () => {
 });
 
 $('#quit').addEventListener('click', async () => {
-  if (!await confirmBox('Arrêter l\'application ? (elle s\'arrête aussi toute seule quand vous fermez l\'onglet)', 'Quitter')) return;
+  if (!await confirmBox('Arrêter l\'application ? Vous pourrez la relancer d\'un double-clic sur « BDD Pubs ». '
+    + '(Fermer l\'onglet ne l\'arrête pas : elle reste disponible sur cette adresse.)', 'Quitter')) return;
   try { await POST('quitter', {}); } catch (_) { /* déjà arrêtée */ }
-  showStopped('L\'application est arrêtée. Vous pouvez fermer cet onglet.');
+  await new Promise(r => setTimeout(r, 400));
+  showStopped('Vous l\'avez arrêtée avec « Quitter ». Vous pouvez fermer cet onglet.');
 });
