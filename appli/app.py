@@ -43,9 +43,33 @@ if FROZEN:
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(HERE, "static")
-DATA_DIR = os.environ.get("BDD_PUBS_DATA", os.path.join(HERE, "data"))
 
-APP_VERSION = "2026.09.30b"
+
+def default_data_dir():
+    """Emplacement fixe des données, indépendant de l'endroit où se trouve le programme :
+    une mise à jour (ou un programme déplacé / supprimé) ne touche jamais aux données."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        return os.path.join(base, "BDD Pubs", "data")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/BDD Pubs/data")
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "bdd-pubs", "data")
+
+
+def documents_dir():
+    home = os.path.expanduser("~")
+    for d in (os.path.join(home, "Documents"), os.path.join(home, "OneDrive", "Documents")):
+        if os.path.isdir(d):
+            return d
+    return home
+
+
+DATA_FIXED = bool(os.environ.get("BDD_PUBS_DATA"))  # dossier imposé (tests, usage avancé)
+DATA_DIR = os.environ.get("BDD_PUBS_DATA") or default_data_dir()
+LEGACY_DATA_DIR = os.path.join(HERE, "data")  # anciennes versions : données à côté du programme
+DEFAULT_BACKUP_DIR = os.environ.get("BDD_PUBS_SAUVEGARDES") or os.path.join(documents_dir(), "BDD Pubs - sauvegardes")
+
+APP_VERSION = "2026.10.06"
 
 
 def build_id():
@@ -1131,40 +1155,355 @@ def restore_all(stream, length):
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "wb") as f:
                     f.write(z.read(n))
-        # contrôle : chaque projet listé a une base lisible
-        for pid, info in reg["projets"].items():
-            if not re.fullmatch(r"[a-z0-9-]+", pid) or (info.get("dossier") not in ("", f"projets/{pid}")):
-                raise ApiError(400, "Sauvegarde invalide (dossier de projet inattendu).")
-            dbp = os.path.join(staging, info["dossier"], "bdd_pubs.sqlite") if info["dossier"] else \
-                os.path.join(staging, "bdd_pubs.sqlite")
-            if os.path.exists(dbp):
-                try:
-                    db = sqlite3.connect(dbp)
-                    db.execute("SELECT COUNT(*) FROM ads").fetchone()
-                    db.close()
-                except sqlite3.Error:
-                    raise ApiError(400, f"La base du projet « {info.get('nom', pid)} » est illisible.")
-        with REG_LOCK:
-            # 1. copie de sécurité de l'existant
-            safety_dir = os.path.join(DATA_DIR, "sauvegardes")
-            os.makedirs(safety_dir, exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            safety = os.path.join(safety_dir, f"avant_restauration_{stamp}.zip")
-            export_all(safety)
-            # 2. remplacement (réglages, journal et sauvegardes sont conservés)
-            for name in ("bdd_pubs.sqlite", "images", "miniatures", "projets", "projets.json"):
-                _remove(os.path.join(DATA_DIR, name))
-            for name in ("bdd_pubs.sqlite", "images", "miniatures", "projets", "projets.json"):
-                src = os.path.join(staging, name)
-                if os.path.exists(src):
-                    shutil.move(src, os.path.join(DATA_DIR, name))
-            if not os.path.exists(REGISTRY_PATH):
-                save_registry(reg)
-            OPENED.clear()
-        open_project(None)  # base de lancement prête (dossiers, mise à jour éventuelle)
-        return {"projets": len(reg["projets"]), "securite": os.path.relpath(safety, DATA_DIR)}
+        return apply_restore(staging, reg)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def apply_restore(staging, reg):
+    """Remplace toutes les données par le contenu du dossier staging (organisation de data/),
+    après vérification des bases et une copie de sécurité de l'existant."""
+    for pid, info in reg["projets"].items():
+        if not re.fullmatch(r"[a-z0-9-]+", pid) or (info.get("dossier") not in ("", f"projets/{pid}")):
+            raise ApiError(400, "Sauvegarde invalide (dossier de projet inattendu).")
+        dbp = os.path.join(staging, info["dossier"], "bdd_pubs.sqlite") if info["dossier"] else \
+            os.path.join(staging, "bdd_pubs.sqlite")
+        if os.path.exists(dbp):
+            try:
+                db = sqlite3.connect(dbp)
+                db.execute("SELECT COUNT(*) FROM ads").fetchone()
+                db.close()
+            except sqlite3.Error:
+                raise ApiError(400, f"La base du projet « {info.get('nom', pid)} » est illisible.")
+    # 1. copie de sécurité de l'existant (avant le verrou : la sauvegarde automatique le prend aussi)
+    safety = safety_copy("avant_restauration")
+    with REG_LOCK:
+        # 2. remplacement (réglages, journal et sauvegardes sont conservés)
+        for name in DATA_ITEMS:
+            _remove(os.path.join(DATA_DIR, name))
+        for name in DATA_ITEMS:
+            src = os.path.join(staging, name)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(DATA_DIR, name))
+            elif os.path.isfile(src):
+                shutil.copy2(src, os.path.join(DATA_DIR, name))
+        if not os.path.exists(REGISTRY_PATH):
+            save_registry(reg)
+        OPENED.clear()
+    open_project(None)  # base de lancement prête (dossiers, mise à jour éventuelle)
+    return {"projets": len(reg["projets"]), "securite": safety}
+
+
+DATA_ITEMS = ("bdd_pubs.sqlite", "images", "miniatures", "projets", "projets.json")
+
+
+def safety_copy(reason):
+    """Copie de sécurité avant de remplacer les données. Passe par la sauvegarde automatique
+    (bases + seules les nouvelles photos : léger) ; ZIP complet seulement si elle est impossible."""
+    state = auto_backup()
+    if state.get("ok"):
+        return f"sauvegarde automatique du {datetime.fromisoformat(state['date']):%d/%m/%Y à %Hh%M}"
+    safety_dir = os.path.join(DATA_DIR, "sauvegardes")
+    os.makedirs(safety_dir, exist_ok=True)
+    safety = os.path.join(safety_dir, f"{reason}_{datetime.now():%Y%m%d-%H%M%S}.zip")
+    export_all(safety)
+    prune_safety_copies()
+    return os.path.relpath(safety, DATA_DIR)
+
+
+def prune_safety_copies(keep=5):
+    """Copies de sécurité (avant restauration / reprise) : on garde les plus récentes."""
+    d = os.path.join(DATA_DIR, "sauvegardes")
+    try:
+        zips = sorted((f for f in os.listdir(d) if f.startswith(("avant_restauration_", "avant_reprise_"))
+                       and f.endswith(".zip")), key=lambda f: os.path.getmtime(os.path.join(d, f)))
+    except OSError:
+        return
+    for f in zips[:-keep]:
+        try:
+            os.remove(os.path.join(d, f))
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Protection des données
+#  - reprise automatique des données d'une ancienne version (rangées à côté du programme)
+#  - sauvegarde automatique quotidienne hors du dossier de l'application
+# ---------------------------------------------------------------------------
+def describe_data(d):
+    """Contenu d'un dossier de données : nombre de jeux / pubs / parutions / photos, tous projets."""
+    out = {"chemin": d, "jeux": 0, "pubs": 0, "parutions": 0, "photos": 0, "projets": 0, "date": 0}
+    dbs = [os.path.join(d, "bdd_pubs.sqlite")]
+    pdir = os.path.join(d, "projets")
+    if os.path.isdir(pdir):
+        dbs += [os.path.join(pdir, x, "bdd_pubs.sqlite") for x in sorted(os.listdir(pdir))]
+    for dbp in dbs:
+        if not os.path.isfile(dbp):
+            continue
+        out["projets"] += 1
+        out["date"] = max(out["date"], os.path.getmtime(dbp))
+        try:
+            from pathlib import Path
+            db = sqlite3.connect(Path(dbp).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+            try:
+                c = lambda t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                out["jeux"] += c("games")
+                out["pubs"] += c("ads")
+                out["parutions"] += c("appearances")
+                out["photos"] += c("images")
+            finally:
+                db.close()
+        except sqlite3.Error:
+            pass
+    out["total"] = out["jeux"] + out["pubs"] + out["parutions"]
+    out["date_txt"] = datetime.fromtimestamp(out["date"]).strftime("%d/%m/%Y %H:%M") if out["date"] else ""
+    return out
+
+
+SKIP_SCAN = {"appdata", "node_modules", "$recycle.bin", "windows", "program files", "program files (x86)",
+             "programdata", "library", "__pycache__", "site-packages", "bdd pubs - sauvegardes"}
+LAST_SCAN = set()
+
+
+def scan_for_data(max_depth=3, limit=8000, extra=()):
+    """Cherche des dossiers « data » d'anciennes versions (à côté d'un programme BDD Pubs)."""
+    home = os.path.expanduser("~")
+    roots = []
+    for r in [HERE, os.path.dirname(HERE), home] + [os.path.join(home, n) for n in (
+            "Desktop", "Bureau", "Downloads", "Téléchargements", "Documents",
+            os.path.join("OneDrive", "Desktop"), os.path.join("OneDrive", "Bureau"),
+            os.path.join("OneDrive", "Documents"))]:
+        if os.path.isdir(r) and r not in roots:
+            roots.append(r)
+    current = os.path.realpath(DATA_DIR)
+    found = {}
+
+    def consider(path):
+        rp = os.path.realpath(path)
+        if rp != current and rp not in found and os.path.isfile(os.path.join(rp, "bdd_pubs.sqlite")):
+            found[rp] = describe_data(rp)
+
+    for x in extra:
+        if x:
+            consider(x)
+    consider(LEGACY_DATA_DIR)
+    seen = 0
+    for root in roots:
+        stack = [(root, 0)]
+        while stack and seen < limit:
+            d, depth = stack.pop()
+            seen += 1
+            try:
+                entries = list(os.scandir(d))
+            except OSError:
+                continue
+            for e in entries:
+                try:
+                    if e.is_symlink() or getattr(e, "is_junction", lambda: False)() \
+                            or not e.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                if e.name.startswith(".") or e.name.lower() in SKIP_SCAN:
+                    continue
+                if e.name == "data" and os.path.isfile(os.path.join(e.path, "bdd_pubs.sqlite")):
+                    consider(e.path)
+                    continue
+                if depth < max_depth:
+                    stack.append((e.path, depth + 1))
+    res = [c for c in found.values() if c["total"] > 0]
+    res.sort(key=lambda c: (-c["total"], -c["date"]))
+    LAST_SCAN.clear()
+    LAST_SCAN.update(c["chemin"] for c in res)
+    return res
+
+
+def migrate_from(src):
+    """Copie les données d'un ancien dossier vers l'emplacement fixe. L'ancien dossier n'est pas modifié
+    (on y dépose seulement une note explicative)."""
+    src = os.path.realpath(src)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if describe_data(DATA_DIR)["total"] > 0:  # ne jamais écraser des données sans copie de sécurité
+        safety_copy("avant_reprise")
+    with REG_LOCK:
+        for name in DATA_ITEMS:
+            _remove(os.path.join(DATA_DIR, name))
+        for name in DATA_ITEMS:
+            s_ = os.path.join(src, name)
+            d_ = os.path.join(DATA_DIR, name)
+            if name == "bdd_pubs.sqlite" and os.path.isfile(s_):
+                a_, b_ = sqlite3.connect(s_), sqlite3.connect(d_)
+                a_.backup(b_)
+                b_.close()
+                a_.close()
+            elif os.path.isdir(s_):
+                shutil.copytree(s_, d_)
+            elif os.path.isfile(s_):
+                shutil.copy2(s_, d_)
+        for extra in ("reglages.json",):
+            if os.path.isfile(os.path.join(src, extra)) and not os.path.isfile(os.path.join(DATA_DIR, extra)):
+                shutil.copy2(os.path.join(src, extra), os.path.join(DATA_DIR, extra))
+        OPENED.clear()
+    save_settings(reprise={"source": src, "date": datetime.now().isoformat(timespec="seconds")})
+    try:
+        with open(os.path.join(src, "LISEZMOI - données reprises.txt"), "w", encoding="utf-8") as f:
+            f.write(f"Le {datetime.now():%d/%m/%Y à %H:%M}, BDD Pubs a COPIÉ ces données vers :\n{DATA_DIR}\n\n"
+                    "C'est là que l'application les utilise désormais. Ce dossier-ci n'est plus utilisé :\n"
+                    "c'est une ancienne copie, que vous pouvez garder ou supprimer.\n")
+    except OSError:
+        pass
+    print(f"Données reprises depuis {src}")
+
+
+def auto_migrate(extra=()):
+    """Au démarrage : si l'emplacement fixe est vide, reprendre les données d'une ancienne version."""
+    if DATA_FIXED:
+        return
+    if os.path.isfile(os.path.join(DATA_DIR, "bdd_pubs.sqlite")) and describe_data(DATA_DIR)["total"] > 0:
+        return
+    try:
+        cands = scan_for_data(extra=extra)
+    except Exception:  # noqa: BLE001 - la recherche ne doit jamais empêcher le démarrage
+        traceback.print_exc()
+        return
+    if cands:
+        try:
+            migrate_from(cands[0]["chemin"])
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
+BACKUP_LOCK = threading.Lock()
+BACKUP_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}$")
+KEEP_BACKUPS = 30
+
+
+def backup_dir():
+    return load_settings().get("dossier_sauvegarde") or DEFAULT_BACKUP_DIR
+
+
+def auto_backup():
+    """Sauvegarde hors de l'application : bases de tous les projets (historique daté, 30 conservées)
+    + copie des photos (seules les nouvelles sont copiées). Restaurable depuis l'application."""
+    root = backup_dir()
+    now = datetime.now()
+    with BACKUP_LOCK:
+        try:
+            reg = load_registry()
+            hist_root = os.path.join(root, "historique")
+            name = now.strftime("%Y-%m-%d_%Hh%M")
+            snap = os.path.join(hist_root, name)
+            os.makedirs(snap, exist_ok=True)
+            for pid, info in reg["projets"].items():
+                p = project_by_id(pid)
+                arc = info["dossier"]
+                if os.path.exists(p.db_path):
+                    dest = os.path.join(snap, arc) if arc else snap
+                    os.makedirs(dest, exist_ok=True)
+                    a_, b_ = sqlite3.connect(p.db_path, timeout=15), sqlite3.connect(os.path.join(dest, "bdd_pubs.sqlite"))
+                    a_.backup(b_)
+                    b_.close()
+                    a_.close()
+                for sub, folder in (("images", p.img_dir), ("miniatures", p.thumb_dir)):
+                    if not os.path.isdir(folder):
+                        continue
+                    mirror = os.path.join(root, "photos", arc, sub) if arc else os.path.join(root, "photos", sub)
+                    os.makedirs(mirror, exist_ok=True)
+                    for f in os.listdir(folder):
+                        src_f, dst_f = os.path.join(folder, f), os.path.join(mirror, f)
+                        if not os.path.exists(dst_f) or os.path.getsize(dst_f) != os.path.getsize(src_f):
+                            shutil.copy2(src_f, dst_f)
+            with open(os.path.join(snap, "projets.json"), "w", encoding="utf-8") as f:
+                json.dump(reg, f, ensure_ascii=False, indent=2)
+            olds = sorted(d for d in os.listdir(hist_root) if BACKUP_NAME.match(d))
+            for d in olds[:-KEEP_BACKUPS]:
+                shutil.rmtree(os.path.join(hist_root, d), ignore_errors=True)
+            with open(os.path.join(root, "LISEZMOI.txt"), "w", encoding="utf-8") as f:
+                f.write("Sauvegardes automatiques de BDD Pubs (une par jour, les 30 dernières sont gardées).\n\n"
+                        "- historique\\<date>\\ : la base de tous les projets à cette date\n"
+                        "- photos\\ : toutes les photos (seules les nouvelles sont copiées à chaque fois)\n\n"
+                        "Pour restaurer : application BDD Pubs > menu 📁 > Gérer les projets >\n"
+                        "« Sauvegarde automatique » > Restaurer, à la date voulue.\n")
+            state = {"date": now.isoformat(timespec="seconds"), "ok": True, "dossier": root, "nom": name}
+        except Exception as e:  # noqa: BLE001 - clé USB débranchée, disque plein…
+            traceback.print_exc()
+            state = {"date": now.isoformat(timespec="seconds"), "ok": False, "dossier": root, "erreur": str(e)}
+        save_settings(derniere_sauvegarde=state)
+        return state
+
+
+def backup_due():
+    last = load_settings().get("derniere_sauvegarde") or {}
+    try:
+        when = datetime.fromisoformat(last.get("date", ""))
+    except ValueError:
+        return True
+    age = (datetime.now() - when).total_seconds()
+    if last.get("dossier") != backup_dir():
+        return True
+    return age > (3600 if not last.get("ok") else 20 * 3600)
+
+
+def backup_loop():
+    if STOP.wait(60):  # laisser l'application démarrer tranquillement
+        return
+    while True:
+        try:
+            if backup_due():
+                auto_backup()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        if STOP.wait(1800):
+            return
+
+
+def list_auto_backups():
+    hist_root = os.path.join(backup_dir(), "historique")
+    out = []
+    if os.path.isdir(hist_root):
+        for d in sorted((d for d in os.listdir(hist_root) if BACKUP_NAME.match(d)), reverse=True):
+            info = describe_data(os.path.join(hist_root, d))
+            out.append({"nom": d, "date": f"{d[8:10]}/{d[5:7]}/{d[:4]} à {d[11:13]}h{d[14:16]}",
+                        "jeux": info["jeux"], "pubs": info["pubs"], "parutions": info["parutions"],
+                        "projets": info["projets"]})
+    return out
+
+
+def restore_auto_backup(name):
+    if not BACKUP_NAME.match(name or ""):
+        raise ApiError(400, "Sauvegarde inconnue")
+    root = backup_dir()
+    snap = os.path.join(root, "historique", name)
+    try:
+        with open(os.path.join(snap, "projets.json"), encoding="utf-8") as f:
+            reg = json.load(f)
+    except (OSError, ValueError):
+        raise ApiError(404, "Sauvegarde introuvable ou incomplète")
+    work = tempfile.mkdtemp(prefix="bddpubs_auto_")
+    try:
+        staging = os.path.join(work, "data")
+        shutil.copytree(snap, staging)
+        os.remove(os.path.join(staging, "projets.json"))
+        with open(os.path.join(staging, "projets.json"), "w", encoding="utf-8") as f:
+            json.dump(reg, f, ensure_ascii=False, indent=2)
+        for pid, info in reg.get("projets", {}).items():
+            arc = info.get("dossier", "")
+            for sub in ("images", "miniatures"):
+                mirror = os.path.join(root, "photos", arc, sub) if arc else os.path.join(root, "photos", sub)
+                if os.path.isdir(mirror):
+                    shutil.copytree(mirror, os.path.join(staging, arc, sub) if arc else os.path.join(staging, sub),
+                                    dirs_exist_ok=True)
+        return apply_restore(staging, reg)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def data_status():
+    st = load_settings()
+    return {"dossier_donnees": DATA_DIR, "reprise": st.get("reprise"), "contenu": describe_data(DATA_DIR),
+            "sauvegarde": {"dossier": backup_dir(), "par_defaut": DEFAULT_BACKUP_DIR,
+                           "derniere": st.get("derniere_sauvegarde"), "liste": list_auto_backups()}}
 
 
 # ---------------------------------------------------------------------------
@@ -1295,6 +1634,7 @@ class Handler(BaseHTTPRequestHandler):
             shutil.copyfileobj(f, self.wfile)
 
     def read_json(self):
+        self._consumed = True
         n = int(self.headers.get("Content-Length") or 0)
         if n > MAX_UPLOAD:
             raise ApiError(413, "Fichier trop volumineux (60 Mo max)")
@@ -1308,6 +1648,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routage -------------------------------------------------------------
     def dispatch(self, method):
+        self._consumed = False
+        try:
+            self._dispatch(method)
+        finally:
+            # Contenu de requête non lu : il resterait dans la connexion et fausserait la requête
+            # suivante (connexions réutilisées). On ferme alors la connexion proprement.
+            if not self._consumed and int(self.headers.get("Content-Length") or 0) > 0:
+                self.close_connection = True
+
+    def _dispatch(self, method):
         url = urlparse(self.path)
         path = unquote(url.path)
         qs = {k: v[-1] for k, v in parse_qs(url.query, keep_blank_values=True).items()}
@@ -1352,6 +1702,9 @@ class Handler(BaseHTTPRequestHandler):
     def api(self, method, route, qs):
         parts = route.split("/")
         pid = self.headers.get("X-Projet") or qs.get("projet") or None
+        if parts[0] == "donnees":
+            use_project(project_by_id(None))
+            return self.api_data(method, parts)
         if parts[0] == "projets":
             try:
                 use_project(project_by_id(pid))
@@ -1367,6 +1720,44 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(409, friendly_integrity(table, e))
         finally:
             db.close()
+
+    def api_data(self, method, parts):
+        """Emplacement des données, sauvegarde automatique, reprise d'anciennes données."""
+        action = parts[1] if len(parts) > 1 else ""
+        if method == "GET" and not action:
+            return self.send_json(data_status())
+        if method == "POST" and action == "sauvegarder":
+            state = auto_backup()
+            if not state.get("ok"):
+                raise ApiError(500, f"Sauvegarde impossible dans « {state['dossier']} » : {state.get('erreur')}")
+            return self.send_json(data_status())
+        if method == "PUT" and action == "dossier":
+            path = str(self.read_json().get("dossier") or "").strip().strip('"')
+            if path:
+                if not os.path.isabs(path):
+                    raise ApiError(400, "Indiquez un chemin complet, par ex. E:\\Sauvegardes BDD Pubs")
+                try:
+                    os.makedirs(path, exist_ok=True)
+                    test = os.path.join(path, ".test_ecriture")
+                    with open(test, "w") as f:
+                        f.write("ok")
+                    os.remove(test)
+                except OSError as e:
+                    raise ApiError(400, f"Impossible d'écrire dans ce dossier : {e}")
+            save_settings(dossier_sauvegarde=path or None)
+            return self.send_json(data_status())
+        if method == "POST" and action == "restaurer":
+            return self.send_json(restore_auto_backup(self.read_json().get("nom")))
+        if method == "GET" and action == "recherche":
+            return self.send_json({"resultats": scan_for_data(max_depth=4)})
+        if method == "POST" and action == "reprendre":
+            path = os.path.realpath(str(self.read_json().get("chemin") or ""))
+            if path not in LAST_SCAN:
+                raise ApiError(400, "Dossier inconnu : relancez la recherche.")
+            migrate_from(path)
+            open_project(None)
+            return self.send_json(data_status())
+        raise ApiError(405, "Méthode non autorisée")
 
     def api_projects(self, method, parts, qs):
         current = cur().id
@@ -1389,9 +1780,11 @@ class Handler(BaseHTTPRequestHandler):
                 shutil.rmtree(tmpdir, ignore_errors=True)
         if method == "POST" and target == "restaurer":
             n = int(self.headers.get("Content-Length") or 0)
+            self._consumed = True
             return self.send_json(restore_all(self.rfile, n))
         if method == "POST" and target == "import":
             n = int(self.headers.get("Content-Length") or 0)
+            self._consumed = True
             p = import_project(self.rfile, n, qs.get("nom", ""))
             return self.send_json({"id": p.id, "nom": p.name}, 201)
         if target and method == "GET" and len(parts) == 3 and parts[2] == "export.zip":
@@ -1754,9 +2147,11 @@ def main(argv=None):
     # Déjà lancée ? Même version : on rouvre simplement l'onglet.
     # Autre version (mise à jour) ou autre dossier : on lui demande de s'arrêter et on prend sa place.
     port = None
+    previous_data = []  # dossier de données d'une ancienne version encore lancée
     for p in range(args.port, args.port + 10):
         other = running_instance(p)
         if other:
+            previous_data.append(other.get("data"))
             same = other.get("build") == BUILD and other.get("data") == os.path.realpath(DATA_DIR)
             if same:
                 print(f"BDD Pubs tourne déjà sur le port {p} : ouverture du navigateur.")
@@ -1776,6 +2171,9 @@ def main(argv=None):
         print(f"Aucun port libre entre {args.port} et {args.port + 9}.")
         sys.exit(1)
 
+    # Données d'une ancienne version (à côté du programme, ou celle qui tournait) : reprises
+    # automatiquement si l'emplacement fixe est encore vide.
+    auto_migrate(extra=previous_data)
     open_project(None)
     if args.demo:
         load_demo()
@@ -1789,6 +2187,7 @@ def main(argv=None):
     if args.reseau and lan_ip():
         print(f"  Depuis un téléphone (même Wi-Fi) : http://{lan_ip()}:{port}")
     print(f"  Données : {DATA_DIR}")
+    print(f"  Sauvegarde automatique : {backup_dir()}")
     if auto_stop:
         print("  S'arrête toute seule quand on ferme le dernier onglet.")
     else:
@@ -1802,6 +2201,7 @@ def main(argv=None):
         except ApiError as e:
             print(f"  Accès téléphone non activé : {e.msg}")
     threading.Thread(target=watchdog, args=(httpd, auto_stop), daemon=True).start()
+    threading.Thread(target=backup_loop, daemon=True).start()
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:

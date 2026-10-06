@@ -85,10 +85,10 @@ jobs:
           Double-cliquer sur « BDD Pubs.exe » : l'application s'ouvre dans le navigateur.
           Elle s'arrête toute seule quand on ferme son onglet (ou avec le bouton « Quitter »).
 
-          Les données (base + images) sont enregistrées dans le dossier « data »,
-          créé à côté de « BDD Pubs.exe » : garder les deux ensemble, et sauvegarder ce dossier.
-          Pour reprendre les données d'une version précédente : copier son dossier « data »
-          à côté du nouveau « BDD Pubs.exe » (application fermée).
+          Les données (base, photos, projets) sont rangées à part, dans
+          %LOCALAPPDATA%\BDD Pubs\data : mettre à jour ou supprimer le programme n'y touche pas.
+          Celles d'une ancienne version sont reprises automatiquement au premier lancement.
+          Sauvegarde automatique chaque jour dans Documents\BDD Pubs - sauvegardes.
 
           1er lancement : si Windows affiche « Windows a protégé votre ordinateur »,
           cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
@@ -129,7 +129,7 @@ jobs:
           - **BDD-Pubs-Windows-dossier.zip** (conseillé) : dézipper, puis double-cliquer sur « BDD Pubs.exe » dans le dossier « BDD Pubs ».
           - **BDD-Pubs-Windows.zip** : un seul fichier « BDD Pubs.exe ».
 
-          Mise à jour : dézipper par-dessus l'ancienne version (ou remplacer le programme). Le ZIP ne contient aucune donnée : le dossier « data » (base, photos, projets) n'est pas touché.
+          Mise à jour : dézipper n'importe où et lancer « BDD Pubs.exe ». Les données (base, photos, projets) sont rangées à part et reprises automatiquement ; une sauvegarde automatique quotidienne est faite dans Documents\BDD Pubs - sauvegardes.
           1er lancement : si Windows affiche « Windows a protégé votre ordinateur », cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
           "@
           # remplace la release précédente (absente la 1re fois : on ignore l'erreur)

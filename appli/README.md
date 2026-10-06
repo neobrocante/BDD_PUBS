@@ -4,7 +4,7 @@ Application locale (dans le navigateur, sur `http://localhost:8765`) pour réfé
 jeux vidéo trouvées dans les magazines, avec leurs images.
 
 Rien à installer avec l'exécutable Windows (sinon, Python 3). Pas d'Internet nécessaire, pas de
-compte : tout reste sur l'ordinateur, dans le dossier `data`.
+compte : tout reste sur l'ordinateur (voir « Vos données » plus bas).
 
 ## Lancer l'application
 
@@ -15,7 +15,7 @@ fenêtre noire.
 
 - 1er lancement : si Windows affiche « Windows a protégé votre ordinateur », cliquer sur
   « Informations complémentaires » puis « Exécuter quand même » (l'exécutable n'est pas signé).
-- Les données sont dans le dossier `data`, créé à côté de l'exécutable : garder les deux ensemble.
+- Les données sont rangées à part (voir « Vos données » plus bas) : le programme peut être déplacé ou remplacé.
 - Pour l'avoir sur le bureau : clic droit sur `BDD Pubs.exe` > « Afficher d'autres options » >
   « Envoyer vers » > « Bureau (créer un raccourci) ».
 
@@ -34,8 +34,7 @@ en bas, deux versions au choix :
 (téléchargement direct : `…/releases/latest/download/BDD-Pubs-Windows-dossier.zip`).
 Tant que le dépôt est privé, seuls les comptes GitHub qui y ont accès peuvent l'ouvrir.
 
-Pour passer de l'une à l'autre en gardant ses données : fermer l'application, puis copier le
-dossier `data` à côté du nouveau `BDD Pubs.exe`.
+Les deux versions utilisent les mêmes données (rangées à part) : on peut passer de l'une à l'autre.
 
 ### Avec Python installé : `BDD Pubs.pyw`
 
@@ -107,15 +106,30 @@ projet (sauf le projet de base). Chaque onglet reste sur son projet (adresse `/p
 Sur le disque : le projet de base est directement dans `data/`, les autres dans
 `data/projets/<projet>/`, la liste dans `data/projets.json`.
 
+## Vos données : où elles sont, comment elles sont protégées
+
+- **Emplacement fixe**, indépendant du programme : `%LOCALAPPDATA%\BDD Pubs\data` sous Windows
+  (`~/Library/Application Support/BDD Pubs/data` sur Mac, `~/.local/share/bdd-pubs/data` sous Linux).
+  Mettre à jour, déplacer ou supprimer le programme n'y touche pas.
+- **Reprise automatique** : les anciennes versions rangeaient les données à côté du programme. Au
+  premier lancement d'une nouvelle version, si l'emplacement fixe est vide, les données sont
+  **copiées** depuis la version encore lancée, le dossier du programme, ou le Bureau /
+  Téléchargements / Documents. L'ancien dossier n'est pas modifié (une note y est déposée).
+  Bouton « Retrouver d'anciennes données… » (page Projets) pour chercher à la main.
+- **Sauvegarde automatique quotidienne** dans `Documents\BDD Pubs - sauvegardes` (dossier
+  modifiable : clé USB, OneDrive…) : la base de tous les projets chaque jour (30 jours gardés,
+  quelques Mo) et une copie des photos, où **seules les nouvelles photos sont ajoutées** (le
+  dossier pèse environ le poids des photos, une seule fois). Restauration en un clic à la date
+  voulue (page Projets).
+- Avant toute restauration ou reprise, les données actuelles sont d'abord sauvegardées.
+
 ## Mettre à jour, changer d'ordinateur
 
-- **Mettre à jour** : dézipper la nouvelle version par-dessus l'ancienne (ou remplacer
-  `BDD Pubs.exe`). Le ZIP téléchargé ne contient **jamais** de données : le dossier `data`
-  (base, photos, projets) n'est pas touché.
+- **Mettre à jour** : lancer la nouvelle version, où qu'elle soit dézippée. Le ZIP téléchargé ne
+  contient **jamais** de données, et la nouvelle version remplace d'elle-même l'ancienne si elle
+  tourne encore.
 - **Tout exporter** (page Projets) : un seul ZIP avec tous les projets et toutes les photos.
-- **Tout restaurer** (page Projets) : remet tout exactement comme dans ce ZIP (projets, noms,
-  projet de lancement, photos). Les données actuelles sont d'abord copiées dans
-  `data/sauvegardes/avant_restauration_….zip` (lui-même restaurable).
+- **Tout restaurer** (page Projets) : remet tout exactement comme dans ce ZIP.
 - **Importer un projet** : ajoute un projet exporté seul, à côté des projets existants.
 
 ## Utiliser le téléphone pour prendre les pubs en photo
@@ -127,11 +141,9 @@ lancements suivants. (Pas de mot de passe : à n'activer que sur un réseau de c
 
 ## Sauvegardes
 
-- À chaque démarrage, une copie de la base est faite dans `data/sauvegardes` (15 dernières).
-- Page **Export** > « Télécharger la sauvegarde » : un ZIP avec tout (base + images), à garder
-  ailleurs (clé USB, cloud…).
-- **Restaurer / changer d'ordinateur** : fermer l'application, dézipper la sauvegarde dans le
-  dossier de l'application (elle contient le dossier `data`), relancer.
+Voir « Vos données » plus haut : sauvegarde automatique quotidienne, restauration à une date,
+« Tout exporter / Tout restaurer ». En plus, une copie de chaque base est faite à chaque démarrage
+dans le sous-dossier `sauvegardes` des données (15 dernières).
 
 ## Pour aller plus loin (technique)
 

@@ -861,7 +861,9 @@ async function pageHome(view) {
       <ol><li>Choisir le magazine et taper le numéro (ils sont créés au passage).</li>
       <li>Taper la page, puis chercher la pub : si elle n'existe pas, « Nouvelle pub » (et « Nouveau jeu » si besoin).</li>
       <li>Ajouter une photo ou un scan de la pub (glisser-déposer ou Ctrl+V).</li>
-      <li>Enregistrer, puis passer à la pub suivante du même numéro.</li></ol></div>` : ''}
+      <li>Enregistrer, puis passer à la pub suivante du même numéro.</li></ol>
+      <p style="margin-bottom:0"><b>Vous aviez déjà des données</b> dans une version précédente ?
+      <button type="button" id="find-old">Retrouver mes données</button></p></div>` : ''}
     <div class="tiles">
       <a class="tile" href="#/recherche"><div class="n">${c.appearances}</div><div class="l">parutions référencées</div></a>
       <a class="tile" href="#/pubs"><div class="n">${c.ads}</div><div class="l">pubs différentes</div></a>
@@ -883,6 +885,16 @@ async function pageHome(view) {
             <span class="muted">${plural(m.n, 'parution')} · ${plural(m.issues, 'numéro')}</span></li>`).join('')}</ul>` : '<p class="empty">—</p>'}</div>
       </div>
     </div>`;
+  const fo = $('#find-old', view);
+  if (fo) fo.onclick = () => findOldData();
+  try {
+    const st = await GET('donnees');
+    if (st.reprise && Date.now() - new Date(st.reprise.date).getTime() < 3 * 86400e3) {
+      view.querySelector('.tiles').insertAdjacentHTML('beforebegin', `<div class="notice">✓ Vos données ont été reprises automatiquement
+        depuis <code>${esc(st.reprise.source)}</code> (copie : l'ancien dossier n'a pas été modifié). Elles sont maintenant dans
+        <code>${esc(st.dossier_donnees)}</code>, à l'abri des mises à jour.</div>`);
+    }
+  } catch (_) { /* rien */ }
   $('#recent', view).append(appTable(d.recent, { hide: ['platform'], onChange: () => render(), emptyText: 'Rien pour l\'instant.' }));
 }
 
@@ -1488,13 +1500,10 @@ async function pageExport(view) {
         <p><a class="btn primary" href="${withProj('/api/sauvegarde.zip')}">⬇ Télécharger la sauvegarde de ce projet</a></p>
         <p class="muted">Pour exporter ou importer un projet en particulier, ou créer le projet de démonstration :
         page <a href="#/projets">Projets</a> (menu 📁 en haut à gauche).</p>
-        <h3 style="margin-top:18px">Où sont les données ?</h3>
-        <p class="muted">Tout est dans le dossier <b>data</b> à côté de l'application : la base (<code>bdd_pubs.sqlite</code>),
-        les images et leurs miniatures. Une copie de la base est aussi faite automatiquement à chaque démarrage
-        dans <code>data/sauvegardes</code> (15 dernières).</p>
-        <h3 style="margin-top:18px">Restaurer / changer d'ordinateur</h3>
-        <p class="muted">Fermer l'application, dézipper la sauvegarde à côté de l'application (elle contient le dossier <b>data</b>)
-        en remplaçant l'existant, puis relancer.</p></div>
+        <h3 style="margin-top:18px">Où sont les données ? Sauvegarde automatique ?</h3>
+        <p class="muted">Les données sont rangées à part, à l'abri des mises à jour, et sauvegardées automatiquement
+        chaque jour. Emplacements, restauration et changement d'ordinateur : page <a href="#/projets">Projets</a>,
+        encadré « Vos données sont protégées ».</p></div>
       <div class="card"><h2>Accès depuis le téléphone</h2>
         <p class="muted">Pour saisir ou prendre les pubs en photo avec le téléphone, connecté au même Wi-Fi que l'ordinateur.
         Pas de mot de passe : à n'activer que sur un réseau de confiance (maison).</p>
@@ -1548,6 +1557,7 @@ async function pageProjects(view) {
           <a class="btn" href="/api/projets/${encodeURIComponent(p.id)}/export.zip" title="ZIP de ce projet seul (base + images)">⬇ Exporter</a>
           ${p.protege || p.defaut ? '' : '<button type="button" class="danger" data-act="del">Supprimer</button>'}
         </td></tr>`).join('')}</tbody></table></div></div>
+    <div id="protection"></div>
     <div class="card"><h2>Sauvegarde complète (tous les projets)</h2>
       <p class="muted" style="margin-top:0">Un seul fichier ZIP avec <b>tous les projets et toutes leurs photos</b>.
       À garder en lieu sûr (clé USB, cloud…), et pour changer d'ordinateur : « Tout exporter » sur l'ancien,
@@ -1598,11 +1608,12 @@ async function pageProjects(view) {
     toast(`Projet « ${data.nom} » importé`);
     render();
   };
+  await dataProtectionCard($('#protection', view));
   const restoreI = $('#restore-file', view);
   $('#restore', view).onclick = async () => {
     if (!await confirmBox('Tout restaurer remplace TOUTES les données actuelles (tous les projets et leurs photos) '
-      + 'par celles de la sauvegarde choisie. Une copie de sécurité des données actuelles est faite avant, '
-      + 'dans data/sauvegardes. Continuer ?', 'Choisir la sauvegarde…')) return;
+      + 'par celles de la sauvegarde choisie. Une copie de sécurité des données actuelles est faite avant '
+      + '(sauvegarde automatique). Continuer ?', 'Choisir la sauvegarde…')) return;
     restoreI.click();
   };
   restoreI.onchange = async () => {
@@ -1637,6 +1648,95 @@ async function pageProjects(view) {
     await drawProjectSwitcher();
     render();
   });
+}
+
+// Retrouver les données d'une ancienne version (dossier « data » rangé à côté d'un ancien programme)
+async function findOldData() {
+  toast('Recherche des anciennes données…');
+  const { resultats } = await GET('donnees/recherche');
+  const body = el('div');
+  if (!resultats.length) {
+    body.innerHTML = `<p style="margin-top:0">Aucune ancienne donnée trouvée (Bureau, Téléchargements, Documents, dossier du programme).</p>
+      <p class="muted">Si vous avez une sauvegarde (« Tout exporter »), utilisez « Tout restaurer » dans la page Projets.</p>
+      <div class="actions"><button type="button" class="primary" data-close2>Fermer</button></div>`;
+  } else {
+    body.innerHTML = `<p style="margin-top:0">Dossiers de données trouvés. « Reprendre » les <b>copie</b> dans l'application
+      (le dossier d'origine n'est pas modifié ; les données actuelles sont d'abord sauvegardées).</p>
+      <ul class="list-mini">${resultats.map((r, i) => `<li><div class="grow"><b>${esc(r.chemin)}</b><br>
+        <small class="muted">${plural(r.jeux, 'jeu', 'jeux')} · ${plural(r.pubs, 'pub')} · ${plural(r.parutions, 'parution')}
+        · ${plural(r.photos, 'photo')} · ${plural(r.projets, 'projet')} · modifié le ${esc(r.date_txt)}</small></div>
+        <button type="button" class="primary" data-i="${i}">Reprendre</button></li>`).join('')}</ul>`;
+  }
+  const m = openModal('Retrouver mes anciennes données', body, { wide: true });
+  body.addEventListener('click', async e => {
+    if (e.target.closest('[data-close2]')) return m.close();
+    const b = e.target.closest('button[data-i]');
+    if (!b) return;
+    const r = resultats[+b.dataset.i];
+    if (!await confirmBox(`Reprendre les données de « ${r.chemin} » ? Elles remplaceront les données actuelles (copiées avant par sécurité).`, 'Reprendre')) return;
+    b.disabled = true;
+    await POST('donnees/reprendre', { chemin: r.chemin });
+    m.close();
+    toast('Données reprises');
+    setTimeout(() => { history.replaceState(null, '', '/#/'); location.reload(); }, 800);
+  });
+}
+
+// Sauvegarde automatique, emplacement des données
+async function dataProtectionCard(container) {
+  const d = await GET('donnees');
+  const sv = d.sauvegarde, last = sv.derniere;
+  const lastTxt = last ? new Date(last.date).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) : null;
+  container.innerHTML = `<div class="card"><h2>🛡 Vos données sont protégées</h2>
+    <dl class="info">
+      <dt>Données</dt><dd><code>${esc(d.dossier_donnees)}</code><br><small class="muted">Emplacement fixe, indépendant du programme :
+        mettre à jour, déplacer ou supprimer le programme n'y touche pas.</small></dd>
+      <dt>Sauvegarde auto.</dt><dd><code>${esc(sv.dossier)}</code><br>
+        ${!last ? '<span class="muted">Première sauvegarde dans quelques minutes.</span>'
+          : last.ok ? `<span style="color:var(--ok);font-weight:600">✓ Dernière sauvegarde : ${esc(lastTxt)}</span>`
+          : `<span style="color:var(--no);font-weight:600">⚠ Échec le ${esc(lastTxt)} : ${esc(last.erreur || '')}</span>`}
+        <br><small class="muted">Chaque jour : la base de tous les projets (30 jours d'historique) et une copie de toutes les photos.
+        Idéalement dans un dossier synchronisé (OneDrive…) ou sur une clé USB.</small></dd>
+    </dl>
+    <div class="btns" style="margin-top:12px">
+      <button type="button" class="primary" data-a="now">Sauvegarder maintenant</button>
+      <button type="button" data-a="dir">Changer le dossier de sauvegarde…</button>
+      <button type="button" data-a="find">Retrouver d'anciennes données…</button>
+    </div>
+    ${sv.liste.length ? `<h3 style="margin-top:16px">Restaurer une sauvegarde automatique</h3>
+      <div class="table-wrap"><table class="data"><tbody>${sv.liste.slice(0, 10).map(b => `<tr>
+        <td><b>${esc(b.date)}</b></td><td class="muted">${plural(b.jeux, 'jeu', 'jeux')} · ${plural(b.pubs, 'pub')} · ${plural(b.parutions, 'parution')}
+        · ${plural(b.projets, 'projet')}</td>
+        <td class="row-actions"><button type="button" data-restore="${esc(b.nom)}">Restaurer</button></td></tr>`).join('')}</tbody></table></div>
+      ${sv.liste.length > 10 ? `<small class="muted">${sv.liste.length} sauvegardes conservées (les 10 plus récentes sont affichées).</small>` : ''}` : ''}
+  </div>`;
+  container.onclick = async e => {
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    const rs = e.target.closest('[data-restore]')?.dataset.restore;
+    if (a === 'now') {
+      e.target.disabled = true;
+      try { await POST('donnees/sauvegarder', {}); toast('Sauvegarde faite'); } catch (ex) { toast(ex.message, 'err'); }
+      dataProtectionCard(container);
+    } else if (a === 'dir') {
+      const r = await formModal({
+        title: 'Dossier de la sauvegarde automatique', values: { dossier: sv.dossier === sv.par_defaut ? '' : sv.dossier },
+        fields: [{ name: 'dossier', label: 'Dossier (chemin complet)', wide: true, placeholder: sv.par_defaut,
+          help: `Ex. E:\\Sauvegardes BDD Pubs (clé USB) ou un dossier OneDrive. Vide = dossier par défaut (${sv.par_defaut}).` }],
+        onSubmit: data => PUT('donnees/dossier', data),
+      });
+      if (r) { toast('Dossier enregistré'); try { await POST('donnees/sauvegarder', {}); } catch (ex) { toast(ex.message, 'err'); } dataProtectionCard(container); }
+    } else if (a === 'find') {
+      findOldData();
+    } else if (rs) {
+      const b = sv.liste.find(x => x.nom === rs);
+      if (!await confirmBox(`Revenir à la sauvegarde du ${b.date} ? Toutes les données actuelles seront remplacées `
+        + '(elles sont d\'abord sauvegardées par sécurité).', 'Restaurer')) return;
+      toast('Restauration en cours…');
+      await POST('donnees/restaurer', { nom: rs });
+      toast('Restauration terminée');
+      setTimeout(() => { history.replaceState(null, '', '/#/projets'); location.reload(); }, 1000);
+    }
+  };
 }
 
 // Sélecteur de projet dans l'en-tête
