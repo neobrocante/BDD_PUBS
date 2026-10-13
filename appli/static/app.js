@@ -757,6 +757,10 @@ async function openAppearanceForm(values = {}) {
     extra: form => {
       if (isNew) return;
       const row = el('div', 'field wide');
+      const adRow = el('div', 'field wide');
+      adRow.innerHTML = `<button type="button" style="align-self:flex-start">✎ Modifier la pub elle-même (nb de pages, description, plateformes…)</button>`;
+      $('button', adRow).onclick = () => editAdInPlace(values.ad_id);
+      form.append(adRow);
       row.innerHTML = `<span>Photo de VOTRE exemplaire (facultatif)</span>
         <small>Seulement pour garder une trace de votre page à vous : état, photo pour la vente…
         L'image de la pub elle-même se met sur la fiche de la pub.</small>`;
@@ -802,7 +806,8 @@ function appTable(items, { hide = [], onChange = () => {}, emptyText = 'Aucune p
       ${show('platform') ? `<td>${esc(r.platform || '')}</td>` : ''}
       <td>${saleBtn(r.for_sale)}</td>
       <td class="notes">${esc(r.notes)}</td>
-      <td class="row-actions"><button type="button" class="icon" data-act="edit" title="Modifier">✎</button>
+      <td class="row-actions"><button type="button" class="icon" data-act="edit" title="Modifier cette parution (page, vente, remarques…)">✎</button>
+        <button type="button" class="icon small-txt" data-act="editad" title="Modifier la pub elle-même (nb de pages, description, plateformes…)">✎ pub</button>
         <button type="button" class="icon" data-act="del" title="Supprimer">🗑</button></td></tr>`).join('')}</tbody></table>`;
   wrap.addEventListener('click', async e => {
     const tr = e.target.closest('tr[data-i]');
@@ -819,6 +824,8 @@ function appTable(items, { hide = [], onChange = () => {}, emptyText = 'Aucune p
       onChange('sale');
     } else if (act === 'edit') {
       if (await openAppearanceForm(r)) onChange();
+    } else if (act === 'editad') {
+      if (await editAdInPlace(r.ad_id)) onChange();
     } else if (act === 'del') {
       if (await confirmBox(`Supprimer la parution de « ${r.game} » dans ${r.magazine} n°${r.number} p.${r.page} ?`)) {
         await DEL(`appearances/${r.id}`);
@@ -831,6 +838,21 @@ function appTable(items, { hide = [], onChange = () => {}, emptyText = 'Aucune p
   return wrap;
 }
 
+// Bouton « ← Retour » des fiches (dès qu'on a navigué dans l'appli)
+const backBtn = () => navCount > 0 ? '<button type="button" class="back-btn" title="Revenir à la page précédente">← Retour</button>' : '';
+
+// Modifier une pub (nb de pages, description…) en fenêtre, sans quitter la page courante
+async function editAdInPlace(adId) {
+  const ad = await GET(`ads/${adId}`);
+  return openAdForm(ad);
+}
+
+// Toutes les images d'une pub, en grand (photo entière, non recadrée)
+async function zoomAd(adId) {
+  const ad = await GET(`ads/${adId}`);
+  if (ad.images.length) lightbox(ad.images.map(im => ({ url: im.url, caption: ad.description || ad.game_title })), 0);
+}
+
 // Clic sur une miniature de tableau : images d'origine de l'exemplaire puis de la pub
 async function openThumb(r) {
   const [d, ad] = await Promise.all([GET(`appearances/${r.id}`), GET(`ads/${r.ad_id}`)]);
@@ -840,12 +862,20 @@ async function openThumb(r) {
 
 function adCard(a) {
   return `<a class="ad-card" href="#/pubs/${a.id}">
-    <div class="img">${a.thumb_url ? `<img loading="lazy" src="${esc(a.thumb_url)}" alt="">` : '<div class="none">Pas encore d\'image</div>'}</div>
+    <div class="img">${a.thumb_url ? `<img loading="lazy" src="${esc(a.thumb_url)}" alt="" data-zoom-ad="${a.id}" title="Voir la photo entière">` : '<div class="none">Pas encore d\'image</div>'}</div>
     <div class="body"><div class="t">${esc(a.game_title)}</div>
       <div class="d">${esc(a.description || '—')}</div>
       <div class="meta"><span>#${a.id} · ${esc(a.platform_name || '')}</span><span>${plural(a.app_count, 'parution')}</span></div>
     </div></a>`;
 }
+
+document.addEventListener('click', e => {
+  const img = e.target.closest('[data-zoom-ad]');
+  if (!img) return;
+  e.preventDefault();
+  e.stopPropagation();
+  zoomAd(img.dataset.zoomAd);
+}, true);
 
 // ===========================================================================
 // Pages
@@ -902,12 +932,12 @@ async function pageHome(view) {
 async function pageEntry(view, params) {
   view.innerHTML = `
     <div class="page-head"><div><h1>Saisie rapide</h1>
-      <div class="sub">Un numéro de magazine, puis les pubs qu'il contient, l'une après l'autre.</div></div></div>
+      <div class="sub saisie">Un numéro de magazine, puis les pubs qu'il contient, l'une après l'autre.</div></div></div>
     <div class="grid-entry">
       <form class="card" id="entry" autocomplete="off">
         <div class="step"><span class="num">1</span><h2>Numéro</h2></div>
-        <div class="form">
-          <div class="field wide"><span>Magazine <b class="req">*</b></span><div id="f-mag"></div></div>
+        <div class="form issue-row">
+          <div class="field mag"><span>Magazine <b class="req">*</b></span><div id="f-mag"></div></div>
           <label class="field"><span>Numéro <b class="req">*</b></span><input id="f-num" placeholder="425"></label>
           <label class="field"><span>Date de parution</span><input id="f-date" placeholder="AAAA-MM-JJ"></label>
         </div>
@@ -916,20 +946,22 @@ async function pageEntry(view, params) {
         <div class="step"><span class="num">2</span><h2>Pub trouvée</h2></div>
         <div class="form">
           <div class="field wide"><span>Jeu <b class="req">*</b></span><div id="f-game"></div>
-            <small>Tapez les premières lettres du jeu. S'il n'existe pas encore : « ＋ Nouveau jeu ».</small></div>
+            <small class="hint">Tapez les premières lettres du jeu. S'il n'existe pas encore : « ＋ Nouveau jeu ».</small></div>
           <div class="field wide" id="ad-pick" hidden><span>Quelle pub ? <b class="req">*</b></span>
-            <small>Touchez la pub si vous la reconnaissez (🔍 pour l'agrandir), sinon « ＋ Nouvelle pub ».</small>
+            <small class="hint">Touchez la pub si vous la reconnaissez (🔍 pour l'agrandir), sinon « ＋ Nouvelle pub ».</small>
             <div class="ad-grid" id="ad-grid"></div></div>
           <div class="wide" id="ad-preview"></div>
+          <div class="wide pvr-row">
           <label class="field"><span>Page</span><input id="f-page" placeholder="12, 表4…"></label>
           <div class="field"><span>En vente</span>
             <div class="toggle-sale">
               <label class="no"><input type="radio" name="sale" value="0" checked>${BATSU} Non</label>
               <label class="yes"><input type="radio" name="sale" value="1">${MARU} Oui</label>
             </div></div>
-          <label class="field wide"><span>Remarques</span><input id="f-notes" placeholder="État, prix, scan fait…"></label>
+          <label class="field"><span>Remarques</span><input id="f-notes" placeholder="État, prix, scan fait…"></label>
+          </div>
           <div class="form-error" id="f-err"></div>
-          <div class="actions"><span class="kbd" style="margin-right:auto;align-self:center"><kbd>Entrée</kbd> ou <kbd>Ctrl</kbd>+<kbd>Entrée</kbd> pour enregistrer</span>
+          <div class="actions save-bar"><span class="kbd" style="margin-right:auto;align-self:center"><kbd>Entrée</kbd> ou <kbd>Ctrl</kbd>+<kbd>Entrée</kbd> pour enregistrer</span>
             <button type="submit" class="primary big">Enregistrer</button></div>
         </div>
       </form>
@@ -996,6 +1028,7 @@ async function pageEntry(view, params) {
     drawAds();
     showAd(selAd);
     pageI.focus({ preventScroll: true });
+    pageI.scrollIntoView({ block: 'nearest' });
   });
   async function newAdFor(g) {
     const a = await openAdForm({ game_id: g.id });
@@ -1021,9 +1054,14 @@ async function pageEntry(view, params) {
       <div style="flex:1;min-width:0"><b>${esc(a.game_title)}</b> <span class="muted">${esc(a.platform_name || '')}</span><br>
       ${esc(a.description || '')}<br>
       <small>Pub #${a.id} · ${fmtPages(a.pages) || '?'} p. · déjà vue ${plural(a.app_count, 'fois', 'fois')}</small>
+        · <a href="#/pubs/${a.id}" target="_blank" tabindex="-1">fiche ↗</a>
+        · <a href="#" data-edit-ad tabindex="-1">✎ modifier cette pub</a>
       ${dup.length ? `<div class="warn">Déjà saisie dans ce numéro (p. ${dup.map(r => esc(r.page) || '?').join(', ')})</div>` : ''}
-      <div style="margin-top:4px"><a href="#/pubs/${a.id}" target="_blank" tabindex="-1">ouvrir la fiche ↗</a></div>
       <div class="ad-img-slot" style="margin-top:8px"></div></div></div>`;
+    $('[data-edit-ad]', box).onclick = async e => {
+      e.preventDefault();
+      if (await editAdInPlace(a.id)) { await ad.reload(); showAd(ad.item); }
+    };
     if (!a.img_count) {
       const dz = dropzone(async files => {
         if (!await uploadFiles(files, 'ads', a.id)) return;
@@ -1236,7 +1274,7 @@ async function pageAd(view, params, id) {
   async function load() {
     const a = await GET(`ads/${id}`);
     view.innerHTML = `
-      <div class="page-head"><div><div class="crumbs"><a href="#/pubs">Pubs</a> › #${a.id}</div>
+      <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/pubs">Pubs</a> › #${a.id}</div>
         <h1><a href="#/jeux/${a.game_id}">${esc(a.game_title)}</a> <span class="muted">· ${esc(a.platform_name || 'plateforme ?')}</span></h1>
         <div class="sub">${esc(a.description || 'Sans description')}</div></div>
         <div class="btns"><button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
@@ -1325,7 +1363,7 @@ async function pageGame(view, params, id) {
   async function load() {
     const g = await GET(`games/${id}`);
     view.innerHTML = `
-      <div class="page-head"><div><div class="crumbs"><a href="#/jeux">Jeux</a></div>
+      <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/jeux">Jeux</a></div>
         <h1>${esc(g.title)}</h1><div class="sub">${esc([g.original_title, g.series_name && 'série ' + g.series_name, g.publisher, g.year].filter(Boolean).join(' · '))}</div>
         ${g.platforms ? `<div class="sub">Plateformes (d'après ses pubs) : <b>${esc(g.platforms)}</b></div>` : ''}</div>
         <div class="btns"><button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
@@ -1362,7 +1400,7 @@ async function pageMagazines(view) {
     <div class="page-head"><div><h1>Magazines</h1></div>
       <div class="btns"><button type="button" class="primary" id="new">＋ Nouveau magazine</button></div></div>
     <div class="card"><div class="table-wrap">${list.length ? `<table class="data"><thead><tr><th>Magazine</th><th>Éditeur</th><th>Périodicité</th>
-      <th class="num">Numéros</th><th class="num">Parutions</th><th class="num">En vente</th><th>Période</th></tr></thead>
+      <th class="num">Numéros</th><th class="num">Publicités</th><th class="num">En vente</th><th>Période</th></tr></thead>
       <tbody>${list.map(m => `<tr class="clickable" data-id="${m.id}"><td><b>${esc(m.name)}</b></td><td>${esc(m.publisher)}</td>
         <td>${esc(m.frequency)}</td><td class="num">${m.issues_count}</td><td class="num">${m.app_count}</td><td class="num">${m.sale_count}</td>
         <td class="muted">${m.first_date ? esc(m.first_date) + ' → ' + esc(m.last_date) : ''}</td></tr>`).join('')}</tbody></table>`
@@ -1375,13 +1413,13 @@ async function pageMagazine(view, params, id) {
   async function load() {
     const m = await GET(`magazines/${id}`);
     view.innerHTML = `
-      <div class="page-head"><div><div class="crumbs"><a href="#/magazines">Magazines</a></div><h1>${esc(m.name)}</h1>
+      <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/magazines">Magazines</a></div><h1>${esc(m.name)}</h1>
         <div class="sub">${esc([m.publisher, m.frequency].filter(Boolean).join(' · '))}</div></div>
         <div class="btns"><a class="btn" href="#/recherche?magazine_id=${m.id}">Toutes ses pubs</a>
           <button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
       <div class="tiles">
         <div class="tile"><div class="n">${m.issues_count}</div><div class="l">numéros répertoriés</div></div>
-        <div class="tile"><div class="n">${m.app_count}</div><div class="l">parutions de pubs</div></div>
+        <div class="tile"><div class="n">${m.app_count}</div><div class="l">publicités référencées</div></div>
         <div class="tile"><div class="n">${m.sale_count}</div><div class="l">en vente ${MARU}</div></div>
       </div>
       ${m.notes ? `<div class="card">${esc(m.notes)}</div>` : ''}
@@ -1410,7 +1448,7 @@ async function pageIssue(view, params, id) {
   async function load() {
     const i = await GET(`issues/${id}`);
     view.innerHTML = `
-      <div class="page-head"><div><div class="crumbs"><a href="#/magazines">Magazines</a> › <a href="#/magazines/${i.magazine_id}">${esc(i.magazine_name)}</a></div>
+      <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/magazines">Magazines</a> › <a href="#/magazines/${i.magazine_id}">${esc(i.magazine_name)}</a></div>
         <h1>${esc(i.magazine_name)} n°${esc(i.number)}</h1><div class="sub">${i.date ? 'Paru le ' + esc(i.date) : 'Date inconnue'}
         · ${plural(i.app_count, 'pub référencée', 'pubs référencées')}</div></div>
         <div class="btns"><a class="btn primary" href="#/saisie?issue=${i.id}">＋ Saisir des pubs dans ce numéro</a>
@@ -1786,6 +1824,8 @@ const ROUTES = [
 ];
 
 let renderToken = 0;
+let navCount = 0; // nombre de changements de page dans cet onglet (pour le bouton « Retour »)
+document.addEventListener('click', e => { if (e.target.closest('.back-btn')) history.back(); });
 async function render() {
   const token = ++renderToken;
   const raw = location.hash.slice(1) || '/';
@@ -1800,6 +1840,7 @@ async function render() {
   try {
     await route[1](view, params, ...path.match(route[0]).slice(1));
     if (token !== renderToken) return;
+
     main.replaceChildren(view);
     window.scrollTo(0, 0);
   } catch (e) {
@@ -1807,7 +1848,7 @@ async function render() {
     main.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
   }
 }
-window.addEventListener('hashchange', render);
+window.addEventListener('hashchange', () => { navCount++; render(); });
 render();
 drawProjectSwitcher();
 
@@ -1847,6 +1888,7 @@ async function heartbeat() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tab: TAB_ID }),
     });
     const info = await r.json().catch(() => ({})); // lire la réponse libère la connexion
+    if (info.version && !$('#version').textContent) $('#version').textContent = 'v' + info.version;
     if (info.build) {
       if (!SERVER_BUILD) SERVER_BUILD = info.build;
       else if (info.build !== SERVER_BUILD && !$('.update-bar')) {

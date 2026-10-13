@@ -152,7 +152,7 @@ input[type="checkbox"] { width: auto; }
 .combo-list li.sel { font-weight: 600; }
 .combo-list li.create { color: var(--accent); font-weight: 600; }
 .combo-list li.empty { color: var(--muted); cursor: default; }
-.combo-list .opt-thumb { width: 34px; height: 34px; flex: none; border-radius: 4px; object-fit: cover; background: var(--panel-2); }
+.combo-list .opt-thumb { width: 34px; height: 34px; flex: none; border-radius: 4px; object-fit: contain; background: var(--panel-2); }
 .combo-list .opt-sub { color: var(--muted); font-size: 12px; }
 
 /* ---------- Tableaux ---------- */
@@ -170,7 +170,7 @@ table.data td.notes { color: var(--muted); max-width: 260px; }
 table.data td.row-actions { white-space: nowrap; text-align: right; }
 td.thumb { width: 52px; }
 .thumb-img {
-  width: 44px; height: 44px; border-radius: 6px; object-fit: cover; display: block;
+  width: 44px; height: 44px; border-radius: 6px; object-fit: contain; display: block;
   background: var(--panel-2); border: 1px solid var(--line); cursor: zoom-in;
 }
 .thumb-none {
@@ -219,7 +219,7 @@ a.tile:hover { text-decoration: none; border-color: var(--accent); }
 }
 .ad-card:hover { border-color: var(--accent); text-decoration: none; }
 .ad-card .img { aspect-ratio: 3 / 4; background: var(--panel-2); display: grid; place-items: center; overflow: hidden; }
-.ad-card .img img { width: 100%; height: 100%; object-fit: cover; }
+.ad-card .img img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
 .ad-card .img .none { color: var(--muted); font-size: 12px; text-align: center; padding: 10px; }
 .ad-card .body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 2px; }
 .ad-card .t { font-weight: 600; }
@@ -237,7 +237,7 @@ a.tile:hover { text-decoration: none; border-color: var(--accent); }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .gallery figure { margin: 0; position: relative; }
 .gallery img {
-  width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; display: block;
+  width: 100%; aspect-ratio: 3 / 4; object-fit: contain; border-radius: 8px; display: block;
   border: 1px solid var(--line); cursor: zoom-in; background: var(--panel-2);
 }
 .gallery figcaption { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; min-height: 24px; }
@@ -280,7 +280,20 @@ a.tile:hover { text-decoration: none; border-color: var(--accent); }
 .step h2 { margin: 0; }
 .issue-status { font-size: 13px; margin-top: 8px; min-height: 20px; }
 .ad-preview { display: flex; gap: 12px; align-items: flex-start; padding: 10px; border-radius: 8px; background: var(--panel-2); margin-top: 8px; }
-.ad-preview img, .ad-preview .thumb-none { width: 72px; height: 96px; object-fit: cover; border-radius: 6px; flex: none; }
+.ad-preview img, .ad-preview .thumb-none { width: 72px; height: 96px; object-fit: contain; background: var(--panel); border-radius: 6px; flex: none; }
+/* Saisie rapide : magazine + numéro + date sur une ligne ; page + vente + remarques sur une ligne ;
+   barre « Enregistrer » toujours visible en bas de l'écran */
+.form.issue-row { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
+.pvr-row .toggle-sale label { white-space: nowrap; }
+.pvr-row { display: grid; grid-template-columns: minmax(70px, 110px) auto minmax(0, 1fr); gap: 10px 12px; align-items: end; }
+.save-bar { position: sticky; bottom: 0; z-index: 2; background: var(--panel); padding: 8px 0 2px; margin-top: 0; border-top: 1px solid var(--line); }
+#entry input { scroll-margin-bottom: 70px; }
+@media (max-width: 600px) {
+  .form.issue-row { grid-template-columns: 1fr 1fr; }
+  .form.issue-row .mag { grid-column: 1 / -1; }
+  .pvr-row { grid-template-columns: 1fr auto; }
+  .pvr-row > :last-child { grid-column: 1 / -1; }
+}
 .ad-preview .warn { color: var(--no); font-weight: 600; }
 .toggle-sale { display: flex; gap: 6px; }
 .toggle-sale label {
@@ -362,7 +375,7 @@ table.data td.row-actions .btn, table.data td.row-actions button:not(.icon) { pa
 .ad-tile .pick:hover { border-color: var(--accent); background: var(--panel); }
 .ad-tile.sel .pick { border-color: var(--accent); background: var(--accent-soft); }
 .ad-tile .im { aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; }
-.ad-tile .im img { width: 100%; height: 100%; object-fit: cover; }
+.ad-tile .im img { width: 100%; height: 100%; object-fit: contain; }
 .ad-tile .im .none { color: var(--muted); font-size: 11px; }
 .ad-tile .t { font-weight: 600; margin-top: 4px; line-height: 1.25; }
 .ad-tile .s { color: var(--muted); font-size: 11px; }
@@ -377,3 +390,50 @@ table.data td.row-actions .btn, table.data td.row-actions button:not(.icon) { pa
 /* Les longs chemins de dossiers passent à la ligne (petits écrans) */
 dl.info dd { min-width: 0; }
 code { overflow-wrap: anywhere; }
+
+/* ---------- Bouton retour, version ---------- */
+.back-btn { padding: 2px 9px; font-size: 12px; margin-right: 8px; }
+.icon.small-txt { font-size: 11px; white-space: nowrap; }
+header.top .version { margin-left: auto; font-size: 11px; color: var(--muted); }
+header.top .version + .quit { margin-left: 8px; }
+
+/* ---------- Écrans de portable (14 pouces : ~1280×720 à 1366×768 utiles) ----------
+   Tout est resserré pour que la saisie tienne sans faire défiler. */
+@media (max-width: 1500px), (max-height: 850px) {
+  body { font-size: 13px; }
+  header.top { padding: 5px 12px; gap: 10px; }
+  .brand { font-size: 14px; } .logo { width: 26px; height: 26px; font-size: 15px; }
+  nav a { padding: 4px 8px; font-size: 13px; }
+  .proj-btn { padding: 3px 8px; font-size: 12px; }
+  main { padding: 12px 14px; }
+  h1 { font-size: 19px; }
+  h2 { font-size: 15px; margin-bottom: 8px; }
+  .page-head { margin-bottom: 10px; }
+  .card { padding: 12px; }
+  .card + .card { margin-top: 12px; }
+  .grid-2, .grid-entry, .grid-detail { gap: 12px; }
+  .tiles { gap: 8px; margin-bottom: 12px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .tile { padding: 9px 12px; } .tile .n { font-size: 21px; }
+  .form { gap: 7px 10px; }
+  input, select, textarea { padding: 5px 8px; }
+  button, .btn { padding: 5px 10px; }
+  button.big { padding: 8px 16px; font-size: 14px; }
+  table.data td { padding: 4px 6px; } table.data th { padding: 4px 6px; }
+  .thumb-img, .thumb-none { width: 36px; height: 36px; }
+  td.thumb { width: 42px; }
+  .step { margin-bottom: 6px; }
+  .step .num { width: 20px; height: 20px; font-size: 12px; }
+  .ad-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .statbar { padding: 7px 10px; margin: 8px 0; gap: 12px; }
+  .filters { gap: 7px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .dropzone { padding: 10px; }
+  .issue-status { margin-top: 4px; }
+  #entry .hint, .page-head .sub.saisie { display: none; }
+  #entry hr { margin: 8px 0 !important; }
+  .ad-tile .im { aspect-ratio: 4 / 5; }
+  .ad-tile .pick { padding: 5px; }
+  .ad-tile.new { min-height: 120px; }
+  .ad-preview { padding: 6px 8px; margin-top: 2px; }
+  .ad-preview > img, .ad-preview > .thumb-none { display: none; }
+}

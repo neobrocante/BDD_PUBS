@@ -63,7 +63,7 @@ ouverte pendant que l'application était arrêtée, elle se reconnecte toute seu
 | **Recherche** | Recherche croisée : magazine, numéro, année, jeu, série, plateforme, n° de pub, en vente, mot-clé. Statistiques + export CSV du résultat. |
 | **Pubs** | Galerie de toutes les pubs (un visuel = une pub, avec un n° unique, une ou **plusieurs plateformes** cochées). Fiche : images, et **tous les magazines où on la trouve**. |
 | **Jeux** | Liste triable (nb de pubs, de parutions, 1re parution). Fiche : toutes ses pubs et toutes ses parutions. |
-| **Magazines** | Magazines > numéros > **les pubs de chaque numéro**, avec la couverture. |
+| **Magazines** | Magazines > numéros > **les publicités de chaque numéro**, avec la couverture. |
 | **Séries & plateformes** | Les listes de référence (plateformes japonaises déjà remplies). |
 | **Export** | CSV pour Excel (toutes les tables) et **sauvegarde complète en ZIP** (base + images). |
 
@@ -79,8 +79,19 @@ d'une image, visible depuis ses 5 parutions.
 - Photo de *votre* exemplaire (état, pour la vente), facultatif : bouton ✎ d'une parution.
 
 Glisser-déposer, cliquer pour choisir un fichier, ou coller une capture (Ctrl+V). Les miniatures
-sont créées automatiquement ; un clic sur une image l'affiche en grand (flèches ← →). L'étoile ★
-choisit l'image principale.
+sont créées automatiquement et montrent l'image **entière** (sans la couper) ; un clic sur une
+miniature l'affiche en grand (flèches ← →). L'étoile ★ choisit l'image principale.
+
+### Corriger sans se perdre
+
+- **← Retour** (en haut des fiches) : revient à la page précédente.
+- **✎ pub** dans les tableaux de pubs d'un numéro, d'un jeu… : corrige la pub elle-même (nombre
+  de pages, description, plateformes) dans une fenêtre, **sans quitter la page**. Même chose avec
+  « ✎ modifier cette pub » dans la saisie rapide, et dans la fenêtre ✎ d'une parution.
+- Le **numéro de version** est affiché en haut à droite (à donner en cas de souci).
+
+Sur un petit écran (portable 14 pouces), l'affichage se resserre tout seul : la saisie rapide
+tient à l'écran et le bouton « Enregistrer » reste toujours visible en bas.
 
 ### Saisie rapide : le jeu, puis la pub reconnue à sa miniature
 

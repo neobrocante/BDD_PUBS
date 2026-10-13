@@ -6,7 +6,7 @@
 > puis cocher la case ici. Poser les « questions ouvertes » au propriétaire **avant** de coder les
 > points concernés (il répond en français, à l'oral, souvent sur téléphone : questions courtes).
 
-État au 13/10/2026 : version `2026.10.13`, tous les tests passent, release publiée.
+État au 13/10/2026 : version `2026.10.13.1`, tous les tests passent, release publiée.
 
 ## Demandes du testeur (reçues le 13/10/2026)
 
@@ -35,26 +35,33 @@ Consigne du propriétaire : **pas d'IA si on peut s'en passer** (aucun point ci-
 
 ### Lot 1 : corrections rapides d'ergonomie
 
-- [ ] **« Publicités » au lieu de « Parutions » côté magazines.** Pages `pageMagazines`,
+Fait le 13/10 (`2026.10.13.1`, test `tests/ui/portable.js`). Bilan : vignettes en `contain` +
+clic → photo entière ; « ← Retour » sur les fiches ; « ✎ pub » dans les tableaux de parutions, la
+fenêtre d'une parution et l'aperçu de la saisie ; affichage resserré sous 1500 px de large ou
+850 px de haut, saisie rapide sur 3 lignes compactes avec barre « Enregistrer » toujours visible ;
+version affichée en haut à droite. Pour le bug de fermeture : demander au testeur la version
+affichée (doit être ≥ 2026.09.30).
+
+- [x] **« Publicités » au lieu de « Parutions » côté magazines.** Pages `pageMagazines`,
   `pageMagazine`, `pageIssue` (en-têtes de colonnes, tuiles, textes). Garder « parution » ailleurs
   sauf avis contraire (c'est le terme interne : une pub trouvée dans un numéro).
-- [ ] **Miniatures qui coupent les photos.** Passer les vignettes en `object-fit: contain` (fond
+- [x] **Miniatures qui coupent les photos.** Passer les vignettes en `object-fit: contain` (fond
   neutre) : `.ad-card .img img`, `.gallery img`, `.ad-tile .im img`, `.thumb-img`, `.opt-thumb`.
   Et un clic sur toute vignette ouvre la photo entière (`lightbox`). Sur la carte de la page Pubs
   (qui est un lien), l'image ouvre la photo, le reste de la carte ouvre la fiche. Vérifier par
   capture avec une image très allongée (scan double page) et une très haute.
-- [ ] **Fonction retour / modifier sur place.** (a) Bouton « ← Retour » (`history.back()`) dans
+- [x] **Fonction retour / modifier sur place.** (a) Bouton « ← Retour » (`history.back()`) dans
   l'en-tête des fiches (pub, jeu, magazine, numéro) quand on vient d'une autre page de l'appli.
   (b) Pouvoir corriger la pub (nb de pages, description, plateformes…) **sans quitter la page
   courante** : bouton « ✎ Modifier la pub » dans la fenêtre de modification d'une parution
   (`openAppearanceForm`), dans l'aperçu de la saisie rapide (`showAd`) et dans les lignes des
   tableaux (`appTable`) → ouvre `openAdForm` en fenêtre, puis rafraîchit la page en place.
-- [ ] **Tenir sur un écran 14 pouces** (≈ 1280×720 à 1366×768 utiles). Densifier : marges, tailles
+- [x] **Tenir sur un écran 14 pouces** (≈ 1280×720 à 1366×768 utiles). Densifier : marges, tailles
   de police et de boutons, en-tête sur une ligne (menu plus compact, éventuellement icônes +
   libellés courts), saisie rapide et grille de miniatures visibles sans défiler. Tester par
   captures en 1280×720 et 1366×768 (et vérifier que rien ne déborde sur téléphone :
   `tests/ui/affichage.js`). Option à envisager : bouton « affichage compact » mémorisé.
-- [ ] **Bug de fermeture après une longue inactivité.** Normalement **corrigé** le 30/09
+- [x] **Bug de fermeture après une longue inactivité.** Normalement **corrigé** le 30/09
   (`2026.09.30` : l'appli reste lancée jusqu'à « Quitter », la page se reconnecte seule).
   Le testeur utilise peut-être une version antérieure. À faire : afficher le **numéro de version**
   dans l'appli (pied de page ou page Export, valeur `APP_VERSION` via `/api/ping`) pour pouvoir le
@@ -155,3 +162,4 @@ Points de la liste :
 - 06/10 : données à un emplacement fixe, reprise automatique des anciennes données, sauvegarde
   automatique quotidienne (incrémentale pour les photos), restauration en un clic.
 - 13/10 : `CLAUDE.md`, cette feuille de route, tests automatiques dans `tests/`.
+- 13/10 : lot 1 (ergonomie, écran de portable, retour, modifier la pub sur place, version affichée).
