@@ -47,6 +47,10 @@ défaut du dépôt). Dépôt **public**.
   visuel), `ad_platforms` (plusieurs plateformes par pub), `appearances` (une pub trouvée dans un
   numéro = « parution »), `images` (rattachées à `ads` / `issues` / `appearances` / `games`).
   `ads.platform_id` est un reste de V1, inutilisé.
+- V3 : `issues.date_label` (date telle qu'écrite, « 8 et 15 avril 1997 » ; `issues.date` reste
+  la date triable déduite par `parse_issue_date`), `issues.pages`, `issues.owned` (catalogue :
+  1 possédé / 0 manquant ; saisir une pub dans un numéro le passe à 1), `games.genre|licence|
+  romaji|wikidata`, `magazines.start_year|end_year|total_issues|platform_id`.
 - **Projets** : plusieurs bases séparées. Liste dans `data/projets.json`. Le projet de base
   `principal` est à la racine de `data/`, les autres dans `data/projets/<id>/`. Le projet d'une
   requête vient de l'en-tête `X-Projet` (ou `?projet=`), sinon du projet « ouvert au lancement ».
@@ -67,7 +71,10 @@ défaut du dépôt). Dépôt **public**.
   (`/api/quitter`) et on prend sa place. **Augmenter `APP_VERSION` à chaque livraison.**
 - L'application **reste lancée** jusqu'au bouton « Quitter » (pas d'arrêt quand on ferme
   l'onglet : les navigateurs endorment les onglets inactifs). `--arret-auto` pour l'ancien mode.
-- Routes : `/api/<table>[/<id>]` (CRUD générique sur `SPEC`), `/api/search`, `/api/dashboard`,
+- Routes : `/api/<table>[/<id>]` (CRUD générique sur `SPEC`), `/api/search` (filtres dans
+  `search_where`, partagés avec `/api/stats?par=…`), `/api/magazines/<id>/generer` (catalogue),
+  `/api/import/lire|appliquer` (classe `Importer`, `read_xlsx` maison), `/api/romaji[/remplir]`,
+  `/api/enligne?q=` (Wikidata, `search_games_online`), `/api/reglages`, `/api/dashboard`,
   `/api/meta`, `/api/images`, `/api/export/<nom>.csv`, `/api/projets/...` (liste, création,
   `import`, `<id>/export.zip`, `tout.zip`, `restaurer`), `/api/donnees/...` (état, `sauvegarder`,
   `dossier`, `restaurer`, `recherche`, `reprendre`), `/api/ping|bye|quitter|reseau`.
@@ -81,7 +88,10 @@ défaut du dépôt). Dépôt **public**.
 - Miniatures **fabriquées par le navigateur** (canvas, 520 px) et envoyées avec l'original
   (base64 en JSON).
 - Saisie rapide (`pageEntry`) : magazine + numéro, puis **jeu → grille des miniatures de ses pubs
-  → on touche la bonne** (ou « Nouvelle pub »), page, en vente ○/×.
+  → on touche la bonne** (ou « Nouvelle pub »), page, en vente ○/×. Elle doit tenir sur un écran
+  1280×720 (test `tests/ui/portable.js`, styles « portable » sous 1500 px / 850 px).
+- Pages ajoutées le 13/10 : `pageCatalogue` / `pageCatalogueMag`, `pageStats`, `importBlock`
+  (page Import / Export), bouton `backBtn()` dans les fils d'Ariane, `editAdInPlace()`.
 
 ## Règles à respecter (leçons apprises, ne pas les défaire)
 
@@ -131,9 +141,9 @@ bash tests/lancer_tests.sh api    # tests API seulement
 
 ## Limites de l'environnement Claude Code web (constatées)
 
-- Wikidata (`www.wikidata.org`, `query.wikidata.org`) est **bloqué** par le proxy (403) : une
-  intégration de base de jeux en ligne ne peut pas être testée « en vrai » d'ici → prévoir des
-  tests avec réponses simulées. PyPI est accessible.
+- Wikidata (`www.wikidata.org`, `query.wikidata.org`) est **bloqué** par le proxy : la recherche
+  en ligne n'est testée qu'avec `tests/wikidata_faux.json` (variable `BDD_PUBS_WIKIDATA_FAUX`,
+  posée par `lancer_tests.sh`). PyPI est accessible (`pykakasi`, facultatif, s'y trouve).
 - Le téléchargement des artefacts GitHub Actions est bloqué : on ne peut pas récupérer l'`.exe`
   construit ; on se fie au test Windows du workflow.
 - Pas d'ordinateur Windows : les chemins `%LOCALAPPDATA%` / `Documents` ne sont testés que via
