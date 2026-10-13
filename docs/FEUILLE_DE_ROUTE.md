@@ -6,7 +6,7 @@
 > puis cocher la case ici. Poser les « questions ouvertes » au propriétaire **avant** de coder les
 > points concernés (il répond en français, à l'oral, souvent sur téléphone : questions courtes).
 
-État au 13/10/2026 : version `2026.10.13.3`, tous les tests passent, release publiée.
+État au 13/10/2026 : version `2026.10.13.4`, toute la liste du testeur est traitée, tous les tests passent, release publiée.
 
 ## Demandes du testeur (reçues le 13/10/2026)
 
@@ -145,7 +145,19 @@ Reste ouvert : demander au testeur un vrai fichier pour vérifier la reconnaissa
 
 ### Lot 5 : données externes
 
-- [ ] **Lecture romaji automatique** : remplir automatiquement un champ « titre en romaji »
+Fait le 13/10 (`2026.10.13.4`). **Romaji** : `kana_romaji()` (Hepburn, macrons pour « ー »,
+sans dépendance), rempli tout seul à la création d'un jeu / pendant la frappe, modifiable,
+bouton « Remplir les romaji » (page Jeux), recherche aussi sur le romaji. Les **kanji** ne sont lus
+que si `pykakasi` est installé (facultatif, détecté au lancement) ; **il n'est pas inclus dans
+l'exécutable** tant que le propriétaire n'a pas validé la licence GPL v3 (pour l'inclure : ajouter
+`pykakasi` au `pip install` du workflow, et `--collect-data pykakasi` aux deux commandes
+PyInstaller). **Wikidata** : `search_games_online()` (bouton « 🔎 Chercher ce jeu en ligne » dans la
+fiche jeu, activé par défaut, réglage sur la page Import / Export), cases vides remplies seulement,
+proxy lu uniquement dans les variables d'environnement (pas de registre). Testé uniquement avec
+des réponses simulées (`tests/wikidata_faux.json`) : **à faire valider en vrai** par le
+propriétaire (Wikidata est bloqué depuis l'environnement Claude Code web).
+
+- [x] **Lecture romaji automatique** : remplir automatiquement un champ « titre en romaji »
   (`games.romaji`) à partir du titre original japonais, modifiable ; recherche aussi sur ce champ.
   Kana → romaji : table maison (Hepburn), sans dépendance. Kanji → romaji : il faut un
   dictionnaire ; candidat `pykakasi` (disponible sur PyPI depuis l'environnement ; **licence
@@ -155,7 +167,7 @@ Reste ouvert : demander au testeur un vrai fichier pour vérifier la reconnaissa
   + `unidic-lite` (plus lourd).
   **Question ouverte** : quel champ doit recevoir le romaji (titre original seulement ?) et
   système souhaité (Hepburn ?).
-- [ ] **Base de données de jeux en ligne (désactivable)** : à la création d'un jeu, proposer des
+- [x] **Base de données de jeux en ligne (désactivable)** : à la création d'un jeu, proposer des
   fiches trouvées en ligne pour pré-remplir titre, titre japonais, éditeur, année, série,
   plateformes, genre. Source proposée : **Wikidata** (gratuit, sans clé, données CC0 ; API
   `wbsearchentities` puis `wbgetentities` : P400 plateforme, P123 éditeur, P577 date, P179 série,
@@ -183,3 +195,4 @@ Reste ouvert : demander au testeur un vrai fichier pour vérifier la reconnaissa
 - 13/10 : lot 1 (ergonomie, écran de portable, retour, modifier la pub sur place, version affichée).
 - 13/10 : lots 2 et 3 (dates libres, statistiques, compteur de pages, catalogue et complétude).
 - 13/10 : lot 4 (import Excel / CSV, dont l'ancien classeur).
+- 13/10 : lot 5 (lecture romaji, recherche de jeux en ligne sur Wikidata).

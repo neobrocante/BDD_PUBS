@@ -183,6 +183,48 @@ check(db.execute("SELECT title, genre FROM games").fetchone() == ("Jeu", ""), "j
 check(len(os.listdir(_P.backup_dir)) == 1, "copie de la base faite avant la mise à jour")
 db.close()
 
+section("Lecture romaji")
+check(APP.kana_romaji("ファイナルファンタジーVII") == ("fainarufantajī VII", True), "katakana + chiffres romains")
+for kana, attendu in (("スーパーマリオブラザーズ", "sūpāmarioburazāzu"), ("がんばれゴエモン", "ganbaregoemon"),
+                      ("メタルギアソリッド", "metarugiasoriddo"), ("チョコボ", "chokobo"), ("しんよう", "shin'you"),
+                      ("ティンクル・スタースプライツ", "tinkuru sutāsupuraitsu"), ("ヴァンパイア", "vanpaia"),
+                      ("マッチ", "matchi"), ("ロックマンＸ", "rokkuman X"), ("ぷよぷよ", "puyopuyo")):
+    check(APP.kana_romaji(kana)[0] == attendu, f"{kana} → {attendu} ({APP.kana_romaji(kana)[0]})")
+r, complet = APP.romaji("サクラ大戦")
+check(r.startswith("sakura") and (complet == ("大戦" not in r)),
+      f"kanji : lus si « pykakasi » est installé, sinon gardés et signalés ({r}, complet={complet})")
+s, g = call("POST", "/api/games", {"title": "Puyo Puyo", "original_title": "ぷよぷよ"})
+check(g["romaji"] == "puyopuyo", "romaji rempli automatiquement à la création d'un jeu")
+s, g = call("PUT", f"/api/games/{g['id']}", {"romaji": "Puyo Puyo (corrigé)"})
+check(g["romaji"] == "Puyo Puyo (corrigé)", "romaji modifiable à la main")
+check(get("/api/games?q=corrig")[0]["id"] == g["id"], "recherche aussi sur le romaji")
+check(get("/api/romaji?texte=%E3%83%86%E3%83%88%E3%83%AA%E3%82%B9")["romaji"] == "tetorisu", "lecture à la demande")
+check(get("/api/games?q=Biohazard%202")[0]["romaji"] == "baiohazādo 2", "jeux de la démo : romaji rempli")
+
+section("Recherche de jeux en ligne (Wikidata simulé)")
+res = get("/api/enligne?q=Final%20Fantasy%20VII")
+check(len(res) == 1, "seuls les jeux vidéo sont proposés (le film est écarté)")
+ff = res[0]
+check((ff["title"], ff["original_title"], ff["year"], ff["publisher"], ff["series"])
+      == ("Final Fantasy VII", "ファイナルファンタジーVII", 1997, "Square", "Final Fantasy"),
+      f"fiche : titres, année (sortie japonaise), éditeur, série ({ff})")
+check(ff["platforms"] == ["PlayStation", "PC (Windows)"], f"plateformes ramenées aux noms de l'application ({ff['platforms']})")
+check(get("/api/enligne?q=%E3%83%95%E3%82%A1%E3%82%A4%E3%83%8A%E3%83%AB%E3%83%95%E3%82%A1%E3%83%B3%E3%82%BF%E3%82%B8%E3%83%BCVII")[0]["wikidata"] == "Q100001",
+      "recherche par le titre japonais")
+call("POST", "/api/reglages", {"enligne": False})
+s, r = call("GET", "/api/enligne?q=Final%20Fantasy%20VII")
+check(s == 403 and "désactivée" in r["error"], "désactivable : plus aucun appel quand c'est coupé")
+call("POST", "/api/reglages", {"enligne": True})
+_faux = os.environ.pop("BDD_PUBS_WIKIDATA_FAUX", None)
+APP.WIKIDATA_API = "http://127.0.0.1:9/api.php"  # personne n'écoute : comme sans Internet
+try:
+    APP.search_games_online("Final Fantasy")
+    check(False, "sans Internet : message clair")
+except APP.ApiError as e:
+    check(e.status == 503 and "Internet" in e.msg, "sans Internet : message clair, pas de plantage")
+if _faux:
+    os.environ["BDD_PUBS_WIKIDATA_FAUX"] = _faux
+
 section("Images")
 png = open(os.path.join(TMP, "image_bleue.png"), "rb").read()
 s, im = call("POST", "/api/images", {"entity": "ads", "entity_id": 2, "name": "scan.png",

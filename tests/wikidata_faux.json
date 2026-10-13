@@ -1,0 +1,285 @@
+{
+ "_lisezmoi": "Réponses Wikidata simulées pour les tests (Wikidata est inaccessible depuis l'environnement de développement). Même format que l'API wbsearchentities / wbgetentities.",
+ "search": {
+  "final fantasy vii": [
+   "Q100001",
+   "Q100005"
+  ],
+  "ファイナルファンタジーvii": [
+   "Q100001"
+  ]
+ },
+ "entities": {
+  "Q100001": {
+   "id": "Q100001",
+   "labels": {
+    "fr": {
+     "language": "fr",
+     "value": "Final Fantasy VII"
+    },
+    "en": {
+     "language": "en",
+     "value": "Final Fantasy VII"
+    },
+    "ja": {
+     "language": "ja",
+     "value": "ファイナルファンタジーVII"
+    }
+   },
+   "descriptions": {
+    "fr": {
+     "language": "fr",
+     "value": "jeu vidéo de 1997"
+    },
+    "en": {
+     "language": "en",
+     "value": "1997 video game"
+    }
+   },
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 7889,
+         "id": "Q7889"
+        }
+       }
+      }
+     }
+    ],
+    "P400": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 10677,
+         "id": "Q10677"
+        }
+       }
+      }
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 1406,
+         "id": "Q1406"
+        }
+       }
+      }
+     }
+    ],
+    "P123": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 100002,
+         "id": "Q100002"
+        }
+       }
+      }
+     }
+    ],
+    "P136": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 100003,
+         "id": "Q100003"
+        }
+       }
+      }
+     }
+    ],
+    "P179": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 100004,
+         "id": "Q100004"
+        }
+       }
+      }
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "datavalue": {
+        "type": "time",
+        "value": {
+         "time": "+1997-09-07T00:00:00Z",
+         "precision": 11
+        }
+       }
+      },
+      "qualifiers": {
+       "P291": [
+        {
+         "datavalue": {
+          "value": {
+           "id": "Q30"
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "mainsnak": {
+       "datavalue": {
+        "type": "time",
+        "value": {
+         "time": "+1997-01-31T00:00:00Z",
+         "precision": 11
+        }
+       }
+      },
+      "qualifiers": {
+       "P291": [
+        {
+         "datavalue": {
+          "value": {
+           "id": "Q17"
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "Q100005": {
+   "id": "Q100005",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Final Fantasy VII: Advent Children"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "2005 film"
+    }
+   },
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "type": "wikibase-entityid",
+        "value": {
+         "entity-type": "item",
+         "numeric-id": 11424,
+         "id": "Q11424"
+        }
+       }
+      }
+     }
+    ]
+   }
+  },
+  "Q10677": {
+   "id": "Q10677",
+   "labels": {
+    "fr": {
+     "language": "fr",
+     "value": "PlayStation"
+    },
+    "en": {
+     "language": "en",
+     "value": "PlayStation"
+    }
+   }
+  },
+  "Q1406": {
+   "id": "Q1406",
+   "labels": {
+    "fr": {
+     "language": "fr",
+     "value": "Microsoft Windows"
+    },
+    "en": {
+     "language": "en",
+     "value": "Microsoft Windows"
+    }
+   }
+  },
+  "Q100002": {
+   "id": "Q100002",
+   "labels": {
+    "fr": {
+     "language": "fr",
+     "value": "Square"
+    },
+    "en": {
+     "language": "en",
+     "value": "Square"
+    },
+    "ja": {
+     "language": "ja",
+     "value": "スクウェア"
+    }
+   }
+  },
+  "Q100003": {
+   "id": "Q100003",
+   "labels": {
+    "fr": {
+     "language": "fr",
+     "value": "jeu vidéo de rôle"
+    },
+    "en": {
+     "language": "en",
+     "value": "role-playing video game"
+    }
+   }
+  },
+  "Q100004": {
+   "id": "Q100004",
+   "labels": {
+    "fr": {
+     "language": "fr",
+     "value": "Final Fantasy"
+    },
+    "en": {
+     "language": "en",
+     "value": "Final Fantasy"
+    }
+   }
+  }
+ }
+}

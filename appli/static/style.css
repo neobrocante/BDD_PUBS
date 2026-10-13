@@ -437,6 +437,15 @@ table.data.small td, table.data.small th { font-size: 12px; padding: 3px 6px; wh
 .import-report .warn, p.warn { color: var(--no); font-weight: 600; }
 .err-list { margin: 0; padding-left: 18px; max-height: 220px; overflow: auto; font-size: 12px; }
 
+/* ---------- Recherche en ligne (fiche jeu) ---------- */
+.online { gap: 6px; }
+.online [data-online] { align-self: flex-start; }
+.online-res { display: grid; gap: 4px; }
+.online-hit { text-align: left; display: block; width: 100%; padding: 6px 8px; }
+.online-hit .muted { display: block; font-size: 12px; }
+.ok-txt { color: var(--ok); }
+small.warn { color: var(--no); }
+
 /* ---------- Écrans de portable (14 pouces : ~1280×720 à 1366×768 utiles) ----------
    Tout est resserré pour que la saisie tienne sans faire défiler. */
 @media (max-width: 1500px), (max-height: 850px) {

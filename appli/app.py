@@ -69,7 +69,7 @@ DATA_DIR = os.environ.get("BDD_PUBS_DATA") or default_data_dir()
 LEGACY_DATA_DIR = os.path.join(HERE, "data")  # anciennes versions : données à côté du programme
 DEFAULT_BACKUP_DIR = os.environ.get("BDD_PUBS_SAUVEGARDES") or os.path.join(documents_dir(), "BDD Pubs - sauvegardes")
 
-APP_VERSION = "2026.10.13.3"
+APP_VERSION = "2026.10.13.4"
 
 
 def build_id():
@@ -638,6 +638,136 @@ def parse_issue_date(text):
     if years and _valid(years[0][1]):
         return _iso(years[0][1]), text
     raise ValueError(text)
+
+
+# ---------------------------------------------------------------------------
+# Lecture romaji (Hepburn) d'un titre japonais. Kana : table maison, sans dépendance.
+# Kanji : il faut un dictionnaire ; si le module facultatif « pykakasi » est installé, il est
+# utilisé, sinon les kanji restent tels quels et la lecture est signalée « partielle ».
+# ---------------------------------------------------------------------------
+KANA = {}
+for _row, _cons in (("あいうえお", ["a", "i", "u", "e", "o"]), ("かきくけこ", ["ka", "ki", "ku", "ke", "ko"]),
+                    ("さしすせそ", ["sa", "shi", "su", "se", "so"]), ("たちつてと", ["ta", "chi", "tsu", "te", "to"]),
+                    ("なにぬねの", ["na", "ni", "nu", "ne", "no"]), ("はひふへほ", ["ha", "hi", "fu", "he", "ho"]),
+                    ("まみむめも", ["ma", "mi", "mu", "me", "mo"]), ("やゆよ", ["ya", "yu", "yo"]),
+                    ("らりるれろ", ["ra", "ri", "ru", "re", "ro"]), ("わゐゑを", ["wa", "i", "e", "o"]),
+                    ("がぎぐげご", ["ga", "gi", "gu", "ge", "go"]), ("ざじずぜぞ", ["za", "ji", "zu", "ze", "zo"]),
+                    ("だぢづでど", ["da", "ji", "zu", "de", "do"]), ("ばびぶべぼ", ["ba", "bi", "bu", "be", "bo"]),
+                    ("ぱぴぷぺぽ", ["pa", "pi", "pu", "pe", "po"]), ("ぁぃぅぇぉ", ["a", "i", "u", "e", "o"]),
+                    ("ゃゅょゎ", ["ya", "yu", "yo", "wa"])):
+    KANA.update(zip(_row, _cons))
+KANA.update({"ん": "n", "ゔ": "vu", "ゕ": "ka", "ゖ": "ke"})
+# Combinaisons (en katakana : la plupart des titres de jeux) : 2 caractères -> romaji
+KANA2 = {"ファ": "fa", "フィ": "fi", "フェ": "fe", "フォ": "fo", "フュ": "fyu", "ティ": "ti", "ディ": "di",
+         "トゥ": "tu", "ドゥ": "du", "テュ": "tyu", "デュ": "dyu", "ヴァ": "va", "ヴィ": "vi", "ヴェ": "ve",
+         "ヴォ": "vo", "ヴュ": "vyu", "ウィ": "wi", "ウェ": "we", "ウォ": "wo", "シェ": "she", "ジェ": "je",
+         "チェ": "che", "ツァ": "tsa", "ツィ": "tsi", "ツェ": "tse", "ツォ": "tso", "イェ": "ye", "クァ": "kwa",
+         "グァ": "gwa", "スィ": "si", "ズィ": "zi"}
+YOON = {"ゃ": "a", "ゅ": "u", "ょ": "o"}
+MACRON = {"a": "ā", "i": "ī", "u": "ū", "e": "ē", "o": "ō"}
+
+
+def _to_hira(c):
+    o = ord(c)
+    return chr(o - 0x60) if 0x30A1 <= o <= 0x30F6 else c
+
+
+def kana_romaji(text):
+    """Kana -> romaji Hepburn. Renvoie (texte, complet) ; complet = False s'il reste des kanji."""
+    t = unicodedata.normalize("NFKC", str(text or ""))  # demi-chasse, chiffres romains Ⅶ -> VII
+    out, i, complete = [], 0, True
+    prev_kana = None
+    while i < len(t):
+        c, pair = t[i], t[i:i + 2]
+        is_kana = "\u3040" <= c <= "\u30ff"
+        if c.isalnum() and prev_kana is not None and is_kana != prev_kana and out and out[-1] != " ":
+            out.append(" ")  # « ファイナルファンタジーVII » -> « fainarufantajī VII »
+        if c.isalnum() or is_kana:
+            prev_kana = is_kana
+        if pair in KANA2:
+            out.append(KANA2[pair])
+            i += 2
+            continue
+        h = _to_hira(c)
+        nxt = _to_hira(t[i + 1]) if i + 1 < len(t) else ""
+        if h in ("っ",):  # petit tsu : double la consonne suivante
+            follow = kana_romaji(t[i + 1:i + 3])[0] if i + 1 < len(t) else ""
+            if follow[:1].isalpha() and follow[:1] not in "aiueo":
+                out.append("t" if follow.startswith("ch") else follow[0])
+            i += 1
+            continue
+        if h in KANA:
+            r = KANA[h]
+            if nxt in YOON and h not in YOON and r.endswith("i") and len(r) > 1:
+                base = r[:-1]
+                r = (base if base in ("sh", "ch", "j") else base + "y") + YOON[nxt]
+                i += 1
+            if h == "ん" and nxt and _to_hira(nxt) in KANA and KANA[_to_hira(nxt)][0] in "aiueoy":
+                r = "n'"
+            out.append(r)
+        elif c == "ー" and out and out[-1] and out[-1][-1] in MACRON:
+            out[-1] = out[-1][:-1] + MACRON[out[-1][-1]]
+        elif c in "・･":
+            out.append(" ")
+        elif c == "ー":
+            pass
+        else:
+            if "一" <= c <= "鿿" or "㐀" <= c <= "䶿":
+                complete = False
+            out.append(c)
+        i += 1
+    return re.sub(r"\s+", " ", "".join(out)).strip(), complete
+
+
+_KAKASI = None
+
+
+def romaji(text):
+    """Lecture romaji d'un titre : (texte, complet)."""
+    global _KAKASI
+    text = str(text or "").strip()
+    if not text:
+        return "", True
+    r, complete = kana_romaji(text)
+    if complete:
+        return r, True
+    if _KAKASI is None:
+        try:
+            import pykakasi  # facultatif (licence GPL v3) : lecture des kanji
+            _KAKASI = pykakasi.kakasi()
+        except Exception:
+            _KAKASI = False
+    if not _KAKASI:
+        return r, False
+    try:
+        parts = []
+        for item in _KAKASI.convert(unicodedata.normalize("NFKC", text)):
+            orig = item.get("orig", "")
+            parts.append(kana_romaji(item.get("hira") or orig)[0] if any(
+                "぀" <= ch <= "ヿ" or "一" <= ch <= "鿿" for ch in orig) else orig)
+        return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip(), True
+    except Exception:
+        return r, False
+
+
+def auto_romaji(db, game_id):
+    """Romaji rempli automatiquement d'après le titre original, s'il est vide."""
+    g = db.execute("SELECT original_title, romaji FROM games WHERE id = ?", (game_id,)).fetchone()
+    if g and g["original_title"] and not g["romaji"]:
+        r, _ = romaji(g["original_title"])
+        if r and r != g["original_title"]:
+            db.execute("UPDATE games SET romaji = ? WHERE id = ?", (r, game_id))
+
+
+def fill_missing_romaji(db):
+    """Remplit le romaji des jeux qui ont un titre original mais pas encore de romaji."""
+    n = 0
+    for g in db.execute("SELECT id, original_title FROM games WHERE romaji = '' AND original_title != ''").fetchall():
+        r, _ = romaji(g["original_title"])
+        if r and r != g["original_title"]:
+            db.execute("UPDATE games SET romaji = ? WHERE id = ?", (r, g["id"]))
+            n += 1
+    return n
 
 
 def clean(table, data, partial=False):
@@ -1751,6 +1881,7 @@ def import_apply(body):
             mapping = {k: int(v) for k, v in (body.get("mapping") or {}).items() if str(v).lstrip("-").isdigit() and int(v) >= 0}
             imp.sheet = body.get("sheet") if len(sheets) > 1 else ""
             imp.run(kind, rows[1:], mapping, first_line=first + 1)
+        fill_missing_romaji(db)
         db.execute("ROLLBACK" if essai else "COMMIT")
     except Exception:
         db.execute("ROLLBACK")
@@ -1758,6 +1889,144 @@ def import_apply(body):
     finally:
         db.close()
     return {**imp.report, "essai": essai}
+
+
+# ---------------------------------------------------------------------------
+# Recherche de jeux en ligne (Wikidata : gratuit, sans compte ni clé, données libres CC0).
+# Désactivable (réglage « enligne »). Appels faits par le serveur, seulement quand on clique
+# sur « Chercher en ligne » ; délai court ; message simple si pas d'Internet.
+# Pas de lecture des réglages proxy du système (registre Windows) : seulement les variables
+# d'environnement. Tests : BDD_PUBS_WIKIDATA_FAUX = fichier JSON de réponses simulées.
+# ---------------------------------------------------------------------------
+WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+WD_GAME = {"Q7889", "Q16070115", "Q865493", "Q4393107"}  # jeu vidéo, compilation, extension, remake
+JAPAN = "Q17"
+# Noms Wikidata (anglais) -> noms de la liste des plateformes de l'application
+WD_PLATFORMS = {
+    "nintendo entertainment system": "Famicom", "family computer": "Famicom", "famicom": "Famicom",
+    "super nintendo entertainment system": "Super Famicom", "super famicom": "Super Famicom",
+    "sega genesis": "Mega Drive", "mega drive": "Mega Drive", "sega cd": "Mega-CD", "32x": "Super 32X",
+    "turbografx-16": "PC Engine", "pc engine": "PC Engine", "turbografx-cd": "PC Engine CD-ROM²",
+    "sega master system": "Mark III / Master System", "master system": "Mark III / Master System",
+    "microsoft windows": "PC (Windows)", "arcade video game": "Arcade", "arcade game": "Arcade",
+    "nintendo switch": "Switch", "playstation portable": "PSP", "playstation vita": "PS Vita",
+    "sega dreamcast": "Dreamcast", "neo geo aes": "Neo Geo", "neo geo mvs": "Neo Geo",
+    "game boy advance": "Game Boy Advance", "game boy color": "Game Boy Color",
+}
+
+
+class OfflineError(Exception):
+    pass
+
+
+def wd_fake(params):
+    """Mini-Wikidata simulé pour les tests (aucun accès réseau)."""
+    with open(os.environ["BDD_PUBS_WIKIDATA_FAUX"], encoding="utf-8") as f:
+        fake = json.load(f)
+    ents = fake["entities"]
+    if params["action"] == "wbsearchentities":
+        ids = fake["search"].get(params["search"].lower(), [])
+        return {"search": [{"id": i, "label": ents[i]["labels"].get("en", {}).get("value", "")} for i in ids]}
+    return {"entities": {i: ents[i] for i in params["ids"].split("|") if i in ents}}
+
+
+def wd_get(params):
+    params = {**params, "format": "json"}
+    if os.environ.get("BDD_PUBS_WIKIDATA_FAUX"):
+        return wd_fake(params)
+    import urllib.error
+    import urllib.request
+    from urllib.parse import urlencode
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
+    req = urllib.request.Request(WIKIDATA_API + "?" + urlencode(params), headers={
+        "User-Agent": f"BDD-Pubs/{APP_VERSION} (application locale de collection de publicités)"})
+    try:
+        with opener.open(req, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError) as e:
+        raise OfflineError(str(e))
+
+
+def _claim_ids(ent, prop):
+    out = []
+    for c in ent.get("claims", {}).get(prop, []):
+        v = c.get("mainsnak", {}).get("datavalue", {}).get("value")
+        if isinstance(v, dict) and v.get("id"):
+            out.append(v["id"])
+    return out
+
+
+def _label(ent, langs=("fr", "en", "ja")):
+    for lg in langs:
+        v = ent.get("labels", {}).get(lg, {}).get("value")
+        if v:
+            return v
+    return ""
+
+
+def _release_year(ent):
+    """Année de sortie : de préférence la sortie au Japon, sinon la plus ancienne."""
+    best, best_jp = None, None
+    for c in ent.get("claims", {}).get("P577", []):
+        t = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("time", "")
+        m = re.match(r"[+-]?(\d{4})", t)
+        if not m:
+            continue
+        y = int(m[1])
+        best = y if best is None else min(best, y)
+        places = [q.get("datavalue", {}).get("value", {}).get("id") for q in c.get("qualifiers", {}).get("P291", [])]
+        if JAPAN in places:
+            best_jp = y if best_jp is None else min(best_jp, y)
+    return best_jp or best
+
+
+def search_games_online(q):
+    q = " ".join(str(q or "").split())
+    if len(q) < 2:
+        raise ApiError(400, "Tapez au moins 2 lettres du titre")
+    japanese = any("぀" <= ch <= "ヿ" or "一" <= ch <= "鿿" for ch in q)
+    try:
+        found = wd_get({"action": "wbsearchentities", "search": q, "language": "ja" if japanese else "fr",
+                        "uselang": "fr", "type": "item", "limit": "12"}).get("search", [])
+        ids = [x["id"] for x in found if x.get("id")]
+        if not ids:
+            return []
+        ents = wd_get({"action": "wbgetentities", "ids": "|".join(ids), "props": "labels|claims|descriptions",
+                       "languages": "fr|en|ja"}).get("entities", {})
+        games = [ents[i] for i in ids if i in ents and (set(_claim_ids(ents[i], "P31")) & WD_GAME)]
+        linked = sorted({x for g in games for p in ("P400", "P123", "P136", "P179", "P8345") for x in _claim_ids(g, p)})[:50]
+        names = {}
+        if linked:
+            le = wd_get({"action": "wbgetentities", "ids": "|".join(linked), "props": "labels",
+                         "languages": "fr|en|ja"}).get("entities", {})
+            names = {k: v for k, v in le.items()}
+    except OfflineError:
+        raise ApiError(503, "Recherche en ligne impossible (pas d'Internet, ou Wikidata ne répond pas). "
+                            "Vous pouvez remplir la fiche à la main.")
+    db = connect()
+    try:
+        ours = {r["name"].lower(): r["name"] for r in db.execute("SELECT name FROM platforms")}
+    finally:
+        db.close()
+    out = []
+    for g in games:
+        def labels(prop, langs=("fr", "en", "ja")):
+            return [_label(names[i], langs) for i in _claim_ids(g, prop) if i in names and _label(names[i], langs)]
+        plats = []
+        for en in labels("P400", ("en", "fr")):
+            name = WD_PLATFORMS.get(en.lower(), en)
+            name = ours.get(name.lower(), name)
+            if name not in plats:
+                plats.append(name)
+        series = labels("P179")
+        out.append({
+            "wikidata": g["id"], "title": _label(g, ("fr", "en", "ja")), "original_title": _label(g, ("ja",)),
+            "description": g.get("descriptions", {}).get("fr", g.get("descriptions", {}).get("en", {})).get("value", ""),
+            "year": _release_year(g), "publisher": " / ".join(labels("P123", ("en", "fr", "ja"))[:2]),
+            "genre": ", ".join(labels("P136")[:2]), "series": series[0] if series else "",
+            "licence": (labels("P8345") or [""])[0], "platforms": plats,
+        })
+    return out
 
 
 def build_backup():
@@ -2297,6 +2566,7 @@ def load_demo():
         # Catalogue : un magazine dont on connaît le nombre de numéros (fictif)
         db.execute("UPDATE magazines SET total_issues = 12, start_year = 1996 WHERE id = ?", (mid["Sega Saturn Magazine"],))
         generate_issues(db, mid["Sega Saturn Magazine"], 1, 12)
+        fill_missing_romaji(db)
     print("Données de démonstration chargées.")
 
 
@@ -2574,6 +2844,22 @@ class Handler(BaseHTTPRequestHandler):
             if parts[1] == "lire":
                 return self.send_json(import_preview(str(body.get("name") or ""), decode_b64(body.get("data")) or b""))
             return self.send_json(import_apply(body))
+        if head == "romaji":
+            if method == "POST" and len(parts) == 2 and parts[1] == "remplir":
+                with db:
+                    return self.send_json({"remplis": fill_missing_romaji(db)})
+            r, complete = romaji(qs.get("texte", ""))
+            return self.send_json({"romaji": r, "complet": complete})
+        if head == "reglages":
+            if method == "POST":
+                body = self.read_json()
+                if "enligne" in body:
+                    save_settings(enligne=bool(body["enligne"]))
+            return self.send_json({"enligne": load_settings().get("enligne", True)})
+        if head == "enligne" and method == "GET":
+            if not load_settings().get("enligne", True):
+                raise ApiError(403, "La recherche en ligne est désactivée (page Import / Export).")
+            return self.send_json(search_games_online(qs.get("q", "")))
         if method == "GET" and head == "stats":
             return self.send_json(stats(db, qs))
         if head == "magazines" and rid and len(parts) == 3 and parts[2] == "generer" and method == "POST":
@@ -2660,6 +2946,8 @@ class Handler(BaseHTTPRequestHandler):
                                     list(data.values())).lastrowid
                 if head == "ads":
                     set_ad_platforms(db, new_id, body.get("platform_ids", []))
+                if head == "games":
+                    auto_romaji(db, new_id)
             return self.send_json(detail(db, head, new_id), 201)
 
         if method == "PUT" and rid is not None:
@@ -2676,6 +2964,8 @@ class Handler(BaseHTTPRequestHandler):
                         raise ApiError(404, "Élément introuvable")
                 if head == "ads":
                     set_ad_platforms(db, rid, body.get("platform_ids"))
+                if head == "games":
+                    auto_romaji(db, rid)
             return self.send_json(detail(db, head, rid))
 
         if method == "DELETE" and rid is not None:

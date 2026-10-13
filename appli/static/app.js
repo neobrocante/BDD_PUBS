@@ -269,6 +269,12 @@ function combo(opts) {
     focus() { input.focus(); },
   };
   if (opts.value != null) c.set(opts.value, true);
+  /* Choisir d'après un texte (ex. série trouvée en ligne) : élément existant, sinon texte à créer. */
+  c.setText = async t => {
+    await ensure();
+    const hit = items.find(it => norm(label(it)) === norm(t));
+    if (hit) setItem(hit); else { setItem(null); input.value = t; }
+  };
   return c;
 }
 
@@ -308,7 +314,7 @@ function gameCombo(extraOpts = {}) {
     source: getGames,
     label: g => g.title,
     match: g => [g.title, g.original_title].filter(Boolean),
-    extra: g => g.original_title,
+    extra: g => `${g.original_title} ${g.romaji || ''}`,
     render: g => `<span style="flex:1">${esc(g.title)}</span><span class="opt-sub">${g.ads_count ? plural(g.ads_count, 'pub') : 'nouveau'}</span>`,
     placeholder: 'Tapez le titre…',
     onCreate: title => openGameForm({ title }),
@@ -526,6 +532,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', on
         ctrls[f.name] = { get: () => s.value, focus: () => s.focus() };
       } else {
         const i = el(f.type === 'textarea' ? 'textarea' : 'input');
+        i.name = f.name;
         if (f.type !== 'textarea') i.type = f.type || 'text';
         if (f.step) i.step = f.step;
         if (f.type === 'number') i.inputMode = 'decimal';
@@ -640,13 +647,16 @@ function platformPicker(initial = []) {
 
 async function openGameForm(values = {}) {
   const isNew = !values.id;
+  let seriesCtl, wikidata = values.wikidata || '';
   return formModal({
     title: isNew ? 'Nouveau jeu' : 'Modifier le jeu',
     values,
     fields: [
       { name: 'title', label: 'Titre', required: true, wide: true, placeholder: 'Final Fantasy VII' },
-      { name: 'original_title', label: 'Titre original', wide: true, placeholder: 'ファイナルファンタジーVII' },
-      { name: 'series_id', label: 'Série', type: 'combo', combo: v => seriesCombo({ value: v }) },
+      { name: 'original_title', label: 'Titre original', placeholder: 'ファイナルファンタジーVII' },
+      { name: 'romaji', label: 'Lecture romaji', placeholder: 'rempli tout seul d\'après le titre original',
+        help: 'Lecture automatique du titre japonais, modifiable.' },
+      { name: 'series_id', label: 'Série', type: 'combo', combo: v => (seriesCtl = seriesCombo({ value: v })) },
       { name: 'publisher', label: 'Éditeur', placeholder: 'Square', suggest: 'publishers' },
       { name: 'year', label: 'Année de sortie', type: 'number', placeholder: '1997' },
       { name: 'genre', label: 'Type de jeu', placeholder: 'RPG, action, course…', suggest: 'genres' },
@@ -654,7 +664,63 @@ async function openGameForm(values = {}) {
         help: 'Licence au sens large (manga, film…), différente de la série de jeux.' },
       { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
     ],
+    extra: form => {
+      const f = form.elements;
+      // Romaji : lu automatiquement quand on tape le titre original (si le champ est vide)
+      let auto = !values.romaji;
+      const romajiNote = el('small', 'muted');
+      f.romaji.closest('.field').append(romajiNote);
+      f.romaji.addEventListener('input', () => { auto = !f.romaji.value.trim(); });
+      const readRomaji = debounce(async () => {
+        if (!auto) return;
+        const t = f.original_title.value.trim();
+        const r = t ? await GET('romaji?' + qs({ texte: t })) : { romaji: '', complet: true };
+        if (!auto) return;
+        f.romaji.value = r.romaji === t ? '' : r.romaji;
+        romajiNote.textContent = r.complet ? '' : 'Lecture partielle : les kanji ne sont pas lus (à compléter à la main).';
+      }, 300);
+      f.original_title.addEventListener('input', readRomaji);
+      // Recherche en ligne (Wikidata), si elle n'est pas désactivée
+      const box = el('div', 'field wide online');
+      f.title.closest('.field').after(box); // juste sous le titre
+      GET('reglages').then(st => {
+        if (!st.enligne) return;
+        box.innerHTML = `<button type="button" class="small-txt" data-online>🔎 Chercher ce jeu en ligne (Wikidata)</button>
+          <div class="online-res"></div>`;
+        const res = $('.online-res', box);
+        let found = [];
+        $('[data-online]', box).onclick = async () => {
+          const q = f.title.value.trim() || f.original_title.value.trim();
+          if (!q) { res.innerHTML = '<small class="muted">Tapez d\'abord le titre.</small>'; return; }
+          res.innerHTML = '<small class="muted">Recherche…</small>';
+          try { found = await GET('enligne?' + qs({ q })); } catch (e) { res.innerHTML = `<small class="warn">${esc(e.message)}</small>`; return; }
+          res.innerHTML = found.length ? '<small class="muted">Touchez la bonne fiche : les cases vides seront remplies (rien n\'est remplacé).</small>'
+            + found.map((g, k) => `<button type="button" class="online-hit" data-k="${k}"><b>${esc(g.title)}</b> ${esc(g.original_title)}
+              <span class="muted">${esc([g.year, g.publisher, g.platforms.join(' / '), g.genre].filter(Boolean).join(' · '))}</span></button>`).join('')
+            : '<small class="muted">Aucun jeu trouvé sous ce titre.</small>';
+        };
+        res.addEventListener('click', async e => {
+          const b = e.target.closest('.online-hit');
+          if (!b) return;
+          const g = found[+b.dataset.k];
+          const put = (name, v) => { if (v != null && v !== '' && !f[name].value.trim()) f[name].value = v; };
+          put('title', g.title); put('original_title', g.original_title); put('publisher', g.publisher);
+          put('year', g.year); put('genre', g.genre); put('licence', g.licence);
+          if (g.series && seriesCtl && !seriesCtl.value) await seriesCtl.setText(g.series);
+          wikidata = g.wikidata;
+          readRomaji();
+          res.innerHTML = `<small class="ok-txt">✓ Fiche ${esc(g.wikidata)} reprise${g.platforms.length ? ` · plateformes : ${esc(g.platforms.join(' / '))}` : ''}.
+            ${g.series && seriesCtl && !seriesCtl.value ? ' Série nouvelle : choisissez « ＋ Créer » dans le champ Série.' : ''}</small>`;
+        });
+      });
+      return null;
+    },
     onSubmit: async data => {
+      data.wikidata = wikidata;
+      if (seriesCtl && !data.series_id && seriesCtl.text) { // série trouvée en ligne mais pas encore créée
+        const sr = await POST('series', { name: seriesCtl.text });
+        data.series_id = sr.id;
+      }
       const g = isNew ? await POST('games', data) : await PUT(`games/${values.id}`, data);
       invalidate();
       toast(isNew ? `Jeu « ${g.title} » créé` : 'Jeu modifié');
@@ -1347,7 +1413,8 @@ async function pageGames(view, params) {
   const meta = await getMeta();
   view.innerHTML = `
     <div class="page-head"><div><h1>Jeux</h1></div>
-      <div class="btns"><button type="button" class="primary" id="new">＋ Nouveau jeu</button></div></div>
+      <div class="btns"><button type="button" id="romaji" title="Lire le titre original des jeux qui n'ont pas encore de romaji">あ→a Remplir les romaji</button>
+        <button type="button" class="primary" id="new">＋ Nouveau jeu</button></div></div>
     <div class="toolbar" id="tb">
       <input type="search" name="q" placeholder="Titre, titre original, éditeur…">
       <select name="series_id"><option value="">Toutes séries</option>${meta.series.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
@@ -1391,6 +1458,12 @@ async function pageGames(view, params) {
   tb.addEventListener('input', debounce(load, 250));
   tb.addEventListener('change', load);
   $('#new', view).onclick = async () => { const g = await openGameForm(); if (g) location.hash = `#/jeux/${g.id}`; };
+  $('#romaji', view).onclick = async () => {
+    const r = await POST('romaji/remplir', {});
+    invalidate();
+    toast(r.remplis ? `Romaji rempli pour ${plural(r.remplis, 'jeu', 'jeux')}` : 'Tous les jeux avec un titre original ont déjà leur romaji');
+    load();
+  };
   await load();
 }
 
@@ -1789,8 +1862,17 @@ async function pageExport(view) {
         <label class="check" style="display:flex;gap:8px;align-items:center;font-weight:600">
           <input type="checkbox" id="net"> Rendre l'application accessible depuis le téléphone</label>
         <div id="net-info" style="margin-top:10px"></div></div>
+      <div class="card"><h2>Recherche de jeux en ligne</h2>
+        <p class="muted">Dans la fiche d'un jeu, le bouton « 🔎 Chercher ce jeu en ligne » propose les fiches de
+        <b>Wikidata</b> (base libre et gratuite) pour remplir titre japonais, éditeur, année, type, série.
+        Seul le titre cherché est envoyé, et uniquement quand on clique. Les jeux japonais peu connus n'y sont pas toujours.</p>
+        <label class="check" style="display:flex;gap:8px;align-items:center;font-weight:600">
+          <input type="checkbox" id="online"> Proposer la recherche en ligne</label></div>
     </div>`;
   importBlock($('#import-card', view));
+  const online = $('#online', view);
+  online.checked = (await GET('reglages')).enligne;
+  online.onchange = async () => { await POST('reglages', { enligne: online.checked }); toast(online.checked ? 'Recherche en ligne activée' : 'Recherche en ligne désactivée'); };
   const box = $('#net', view), info = $('#net-info', view);
   const show = st => {
     box.checked = st.actif;

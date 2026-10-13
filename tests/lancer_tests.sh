@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 PORT=${PORT:-8799}
 TMP=$(mktemp -d -t bddpubs_tests_XXXX)
 export BDD_PUBS_DATA="$TMP/data" BDD_PUBS_SAUVEGARDES="$TMP/sauvegardes" TEST_TMP="$TMP" BASE="http://127.0.0.1:$PORT"
+# Wikidata simulé : aucun accès réseau pendant les tests
+export BDD_PUBS_WIKIDATA_FAUX="$PWD/tests/wikidata_faux.json"
 python3 tests/fixtures.py "$TMP"
 
 python3 appli/app.py --no-browser --demo --port "$PORT" > "$TMP/serveur.log" 2>&1 &

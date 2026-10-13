@@ -125,11 +125,22 @@ pour les statistiques par année. Seule obligation : l'année doit y figurer.
 
 Les magazines ne sont pas pré-remplis : c'est à vous de compléter le catalogue au fil de l'eau.
 
-### Jeux : type, licence
+### Jeux : type, licence, romaji, recherche en ligne
 
 Fiche d'un jeu : **type de jeu** (RPG, action…) et **licence** (Dragon Ball, Gundam… : différente
 de la série de jeux). Les valeurs déjà utilisées sont proposées en tapant. Elles servent de filtres
 dans la Recherche, la liste des Jeux et les Statistiques.
+
+- **Lecture romaji** : remplie toute seule d'après le titre original (`ファイナルファンタジーVII` →
+  `fainarufantajī VII`), modifiable. Les kana sont toujours lus ; les **kanji** ne le sont que si
+  le module facultatif `pykakasi` est installé (sinon ils restent tels quels, à compléter à la
+  main). Page Jeux : « あ→a Remplir les romaji » pour les jeux déjà saisis. La recherche trouve
+  aussi les jeux par leur romaji.
+- **🔎 Chercher ce jeu en ligne** (sous le titre, dans la fiche d'un jeu) : propose les fiches de
+  **Wikidata** (base libre et gratuite, sans compte) ; toucher la bonne remplit les cases vides
+  (titre japonais, éditeur, année, type, série) sans rien remplacer. Seul le titre cherché est
+  envoyé, uniquement au clic. Désactivable : page Import / Export. Les jeux japonais peu connus
+  n'y figurent pas toujours.
 
 ### Importer depuis Excel ou CSV
 
