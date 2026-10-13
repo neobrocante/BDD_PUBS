@@ -6,7 +6,7 @@
 > puis cocher la case ici. Poser les « questions ouvertes » au propriétaire **avant** de coder les
 > points concernés (il répond en français, à l'oral, souvent sur téléphone : questions courtes).
 
-État au 13/10/2026 : version `2026.10.13.2`, tous les tests passent, release publiée.
+État au 13/10/2026 : version `2026.10.13.3`, tous les tests passent, release publiée.
 
 ## Demandes du testeur (reçues le 13/10/2026)
 
@@ -124,7 +124,16 @@ Points de la liste :
 
 ### Lot 4 : import
 
-- [ ] **Fonction d'import.** Déjà là : import d'un projet exporté (ZIP) et « Tout restaurer ».
+Fait le 13/10 (`2026.10.13.3`) : page « Import / Export », fichiers `.xlsx` (lecture maison
+`read_xlsx`, furigana ignorés, dates Excel converties) et `.csv` (« ; » / « , », UTF-8 ou Windows),
+types parutions / jeux / magazines / numéros / pubs, colonnes reconnues d'après leur titre
+(`IMPORT_TYPES`, modifiables dans l'écran), **essai à blanc** puis import, rien n'est remplacé
+(champs vides complétés), pas de doublon en cas de réimport, copie de la base avant import.
+**L'ancien classeur « BDD Pubs » est reconnu** et importé en entier (lignes EXEMPLE ignorées).
+Tests : section « Import Excel / CSV » de `tests/test_api.py`, `tests/ui/import.js`.
+Reste ouvert : demander au testeur un vrai fichier pour vérifier la reconnaissance des colonnes.
+
+- [x] **Fonction d'import.** Déjà là : import d'un projet exporté (ZIP) et « Tout restaurer ».
   Manque : **import de listes depuis Excel/CSV** (jeux, magazines + numéros du catalogue,
   parutions). Proposition : page « Importer » : choisir le type, déposer un fichier `.csv`
   (séparateur `;` ou `,` détecté, UTF-8 avec ou sans BOM) **ou `.xlsx`** (lecture minimale avec
@@ -173,3 +182,4 @@ Points de la liste :
 - 13/10 : `CLAUDE.md`, cette feuille de route, tests automatiques dans `tests/`.
 - 13/10 : lot 1 (ergonomie, écran de portable, retour, modifier la pub sur place, version affichée).
 - 13/10 : lots 2 et 3 (dates libres, statistiques, compteur de pages, catalogue et complétude).
+- 13/10 : lot 4 (import Excel / CSV, dont l'ancien classeur).

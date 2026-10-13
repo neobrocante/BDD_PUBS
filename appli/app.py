@@ -69,7 +69,7 @@ DATA_DIR = os.environ.get("BDD_PUBS_DATA") or default_data_dir()
 LEGACY_DATA_DIR = os.path.join(HERE, "data")  # anciennes versions : données à côté du programme
 DEFAULT_BACKUP_DIR = os.environ.get("BDD_PUBS_SAUVEGARDES") or os.path.join(documents_dir(), "BDD Pubs - sauvegardes")
 
-APP_VERSION = "2026.10.13.2"
+APP_VERSION = "2026.10.13.3"
 
 
 def build_id():
@@ -1280,6 +1280,486 @@ def export_csv(db, name, qs):
     raise ApiError(404, "Export inconnu")
 
 
+# ---------------------------------------------------------------------------
+# Import de listes : CSV (Excel « ; » ou « , », UTF-8 ou Windows) et Excel .xlsx (lu avec
+# zipfile + XML, sans dépendance). Mêmes colonnes que les exports CSV, et l'ancien classeur
+# « BDD Pubs » (onglets Jeux, Pubs, Apparitions…). On ne remplace jamais une valeur existante :
+# un élément déjà présent est seulement complété (champs vides).
+# ---------------------------------------------------------------------------
+XL_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XL_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+
+
+def _xl_col(ref):
+    n = 0
+    for ch in ref:
+        if ch.isalpha():
+            n = n * 26 + ord(ch.upper()) - 64
+        else:
+            break
+    return n - 1
+
+
+def read_xlsx(data):
+    """Classeur .xlsx -> [(nom de l'onglet, lignes)] ; chaque ligne = liste de textes."""
+    from xml.etree import ElementTree as ET
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ApiError(400, "Fichier Excel illisible (.xlsx attendu)")
+    names = set(z.namelist())
+    shared = []
+    if "xl/sharedStrings.xml" in names:
+        for si in ET.fromstring(z.read("xl/sharedStrings.xml")).iter(XL_NS + "si"):
+            # texte simple <t>, ou enrichi <r><t>…</t></r> ; on ignore la lecture furigana <rPh>
+            parts = [si.find(XL_NS + "t")] + [r.find(XL_NS + "t") for r in si.findall(XL_NS + "r")]
+            shared.append("".join(t.text or "" for t in parts if t is not None))
+    rels = {}
+    if "xl/_rels/workbook.xml.rels" in names:
+        for r in ET.fromstring(z.read("xl/_rels/workbook.xml.rels")):
+            t = r.get("Target", "")
+            rels[r.get("Id")] = t.lstrip("/") if t.startswith("/") else "xl/" + t
+    sheets = []
+    wb = ET.fromstring(z.read("xl/workbook.xml"))
+    for sh in wb.iter(XL_NS + "sheet"):
+        path = rels.get(sh.get(XL_REL))
+        if not path or path not in names:
+            continue
+        rows = []
+        for row in ET.fromstring(z.read(path)).iter(XL_NS + "row"):
+            r_num = row.get("r")
+            if r_num and r_num.isdigit():  # lignes vides absentes du fichier : on les recrée
+                while len(rows) < int(r_num) - 1:
+                    rows.append([])
+            cells = {}
+            for c in row.iter(XL_NS + "c"):
+                t, v = c.get("t"), c.find(XL_NS + "v")
+                if t == "s" and v is not None:
+                    val = shared[int(v.text)] if v.text and int(v.text) < len(shared) else ""
+                elif t == "inlineStr":
+                    val = "".join(x.text or "" for x in c.iter(XL_NS + "t"))
+                elif t == "b":
+                    val = "1" if v is not None and v.text == "1" else "0"
+                elif t == "e":
+                    val = ""
+                else:
+                    val = v.text if v is not None and v.text is not None else ""
+                    if val and t != "str":
+                        try:
+                            f = float(val)
+                            val = str(int(f)) if f.is_integer() else repr(f)
+                        except ValueError:
+                            pass
+                cells[_xl_col(c.get("r", "A"))] = val
+            line = [""] * (max(cells) + 1 if cells else 0)
+            for k, val in cells.items():
+                line[k] = val
+            rows.append(line)
+        sheets.append((sh.get("name", "Feuille"), rows))
+    if not sheets:
+        raise ApiError(400, "Aucun onglet lisible dans ce classeur")
+    return sheets
+
+
+def read_csv(data):
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    first = text.split("\n", 1)[0]
+    delim = max((";", ",", "\t"), key=first.count)
+    return [[c for c in r] for r in csv.reader(io.StringIO(text), delimiter=delim)]
+
+
+def read_table_file(name, data):
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext == "xlsx":
+        sheets = read_xlsx(data)
+    elif ext in ("csv", "txt"):
+        sheets = [(os.path.splitext(os.path.basename(name))[0], read_csv(data))]
+    elif ext in ("xls", "ods", "numbers"):
+        raise ApiError(400, "Format non pris en charge : dans Excel ou LibreOffice, « Enregistrer sous » "
+                            "au format .xlsx (classeur Excel) ou .csv, puis réessayer.")
+    else:
+        raise ApiError(400, "Fichier .xlsx ou .csv attendu")
+    out = []
+    for sname, rows in sheets:
+        rows = [[str(c).strip() for c in r] for r in rows]
+        first = 1  # numéro de la ligne des titres (pour citer les bons numéros de ligne)
+        while rows and not any(rows[0]):  # lignes vides au-dessus des titres
+            rows.pop(0)
+            first += 1
+        if rows:
+            width = len(rows[0])
+            while width and not rows[0][width - 1]:
+                width -= 1
+            rows = [(r + [""] * width)[:width] for r in rows]
+            if width:
+                out.append((sname, rows, first))
+    if not out:
+        raise ApiError(400, "Le fichier est vide")
+    return out
+
+
+def _hnorm(h):
+    h = "".join(c for c in unicodedata.normalize("NFKD", str(h).lower()) if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", h).split())
+
+
+# Champs importables par type, avec les en-têtes reconnus (normalisés : minuscules, sans accents)
+IMPORT_TYPES = {
+    "parutions": {
+        "label": "Parutions (pubs trouvées dans les numéros)",
+        "fields": [
+            ("magazine", "Magazine", True, ["magazine", "revue", "mag"]),
+            ("number", "Numéro", True, ["numero", "n", "no", "num", "numero du magazine"]),
+            ("date", "Date du numéro", False, ["date", "date parution", "date de parution", "parution"]),
+            ("page", "Page", False, ["page"]),
+            ("game", "Jeu", True, ["jeu", "titre", "game", "titre du jeu", "nom du jeu"]),
+            ("original_title", "Titre original", False, ["titre original", "titre japonais", "titre jp"]),
+            ("platforms", "Plateforme(s)", False, ["plateforme", "plateformes", "console", "support"]),
+            ("series", "Série", False, ["serie", "series"]),
+            ("ad_ref", "ID pub (ancien fichier)", False, ["id pub", "pub", "n pub", "numero de pub"]),
+            ("description", "Description de la pub", False, ["description pub", "description", "description visuel", "visuel"]),
+            ("pages", "Nb de pages de la pub", False, ["nb pages", "nombre de pages", "pages"]),
+            ("for_sale", "En vente", False, ["en vente", "vente", "en vente o"]),
+            ("notes", "Remarques", False, ["remarques", "remarque", "notes", "commentaire", "commentaires"]),
+        ]},
+    "jeux": {
+        "label": "Jeux",
+        "fields": [
+            ("title", "Titre", True, ["titre", "jeu", "game", "title", "nom du jeu"]),
+            ("original_title", "Titre original", False, ["titre original", "titre japonais", "titre jp"]),
+            ("romaji", "Romaji", False, ["romaji", "titre romaji"]),
+            ("series", "Série", False, ["serie", "series"]),
+            ("publisher", "Éditeur", False, ["editeur", "publisher"]),
+            ("year", "Année", False, ["annee", "annee de sortie", "year", "sortie"]),
+            ("genre", "Type de jeu", False, ["genre", "type", "type de jeu"]),
+            ("licence", "Licence", False, ["licence", "license"]),
+            ("notes", "Remarques", False, ["remarques", "remarque", "notes", "commentaire"]),
+        ]},
+    "magazines": {
+        "label": "Magazines (catalogue)",
+        "fields": [
+            ("name", "Magazine", True, ["magazine", "nom", "revue", "titre"]),
+            ("publisher", "Éditeur", False, ["editeur", "publisher"]),
+            ("frequency", "Périodicité", False, ["periodicite", "frequence"]),
+            ("platform", "Console", False, ["plateforme", "console"]),
+            ("start_year", "Première année", False, ["premiere annee", "debut", "annee de debut"]),
+            ("end_year", "Dernière année", False, ["derniere annee", "fin", "annee de fin"]),
+            ("total_issues", "Nombre de numéros parus", False, ["nombre de numeros parus", "nb numeros parus",
+                                                                 "numeros parus", "total", "nombre de numeros"]),
+            ("notes", "Remarques", False, ["remarques", "remarque", "notes"]),
+        ]},
+    "numeros": {
+        "label": "Numéros (catalogue)",
+        "fields": [
+            ("magazine", "Magazine", True, ["magazine", "revue", "mag"]),
+            ("number", "Numéro", True, ["numero", "n", "no", "num"]),
+            ("date", "Date", False, ["date", "date de parution", "date parution", "parution"]),
+            ("owned", "Possédé", False, ["possede", "je l ai", "owned", "possession"]),
+            ("pages", "Nb de pages", False, ["nb pages", "nombre de pages", "pages"]),
+            ("notes", "Remarques", False, ["remarques", "remarque", "notes"]),
+        ]},
+    "pubs": {
+        "label": "Pubs",
+        "fields": [
+            ("ad_ref", "ID (ancien fichier)", False, ["id", "id pub"]),
+            ("game", "Jeu", True, ["jeu", "titre", "game"]),
+            ("platforms", "Plateforme(s)", False, ["plateforme", "plateformes", "console"]),
+            ("description", "Description", False, ["description", "description visuel", "description pub", "visuel"]),
+            ("pages", "Nb de pages", False, ["nb pages", "nombre de pages", "pages"]),
+            ("notes", "Remarques", False, ["remarques", "remarque", "notes"]),
+        ]},
+}
+SHEET_TYPES = {"apparitions": "parutions", "parutions": "parutions", "jeux": "jeux", "magazines": "magazines",
+               "numeros": "numeros", "pubs": "pubs"}
+
+
+def guess_mapping(kind, headers):
+    hs = [_hnorm(h) for h in headers]
+    mapping, used = {}, set()
+    # d'abord les titres identiques, puis ceux qui commencent pareil (« En vente ○ / × »)
+    for exact in (True, False):
+        for key, _label, _req, aliases in IMPORT_TYPES[kind]["fields"]:
+            if key in mapping:
+                continue
+            for k, h in enumerate(hs):
+                if k in used:
+                    continue
+                if h in aliases if exact else any(h.startswith(a + " ") for a in aliases if len(a) > 3):
+                    mapping[key] = k
+                    used.add(k)
+                    break
+    return mapping
+
+
+def guess_type(sheet_name, headers):
+    t = SHEET_TYPES.get(_hnorm(sheet_name))
+    if t:
+        return t
+    hs = {_hnorm(h) for h in headers}
+    if hs & {"magazine", "revue"} and hs & {"numero", "n", "no", "num"}:
+        return "parutions" if hs & {"jeu", "titre", "game"} else "numeros"
+    if hs & {"magazine", "revue"}:
+        return "magazines"
+    return "jeux"
+
+
+def is_old_workbook(sheets):
+    names = {_hnorm(sh[0]) for sh in sheets}
+    return {"jeux", "pubs", "apparitions"} <= names
+
+
+def import_preview(name, data):
+    sheets = read_table_file(name, data)
+    out = []
+    for sname, rows, _first in sheets:
+        kind = guess_type(sname, rows[0])
+        out.append({"name": sname, "headers": rows[0], "rows": rows[1:9], "count": len(rows) - 1,
+                    "type": kind, "mapping": {t: guess_mapping(t, rows[0]) for t in IMPORT_TYPES}})
+    return {"sheets": out, "classeur": is_old_workbook(sheets),
+            "types": {k: {"label": v["label"], "fields": [{"key": f[0], "label": f[1], "required": f[2]}
+                                                            for f in v["fields"]]}
+                      for k, v in IMPORT_TYPES.items()}}
+
+
+YES = {"1", "oui", "o", "yes", "y", "vrai", "true", "x", "○", "〇", "◯", "✓", "✔", "possede", "possédé"}
+SALE_YES = YES - {"x"}  # « × » / « x » = pas en vente dans l'ancien classeur
+
+
+class Importer:
+    """Applique des lignes (dict champ -> texte) à la base, en créant ce qui manque."""
+
+    def __init__(self, db):
+        self.db = db
+        self.report = {"crees": {}, "deja": {}, "completes": {}, "erreurs": [], "ignorees": 0}
+        self.ad_map = {}  # ID de pub de l'ancien fichier -> ID dans la base
+        self.seen = set()  # chaque élément n'est compté qu'une fois
+        self.sheet = ""
+
+    def count(self, what, kind, key=None):
+        if key is not None:
+            if (kind, key) in self.seen:
+                return
+            self.seen.add((kind, key))
+        self.report[what][kind] = self.report[what].get(kind, 0) + 1
+
+    def fill(self, table, row_id, values, kind):
+        """Complète seulement les champs vides d'un élément existant."""
+        cur_row = dict(self.db.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone())
+        sets = {k: v for k, v in values.items() if v not in ("", None) and cur_row.get(k) in ("", None)}
+        if sets:
+            if "date" in sets:
+                sets["date_label"] = values.get("date_label", "")
+            self.db.execute(f"UPDATE {table} SET {', '.join(k + ' = ?' for k in sets)} WHERE id = ?",
+                            list(sets.values()) + [row_id])
+            self.count("completes", kind, row_id)
+        else:
+            self.count("deja", kind, row_id)
+
+    def by_name(self, table, name, kind, extra=None):
+        name = " ".join(str(name).split())
+        if not name:
+            return None
+        col = "title" if table == "games" else "name"
+        r = self.db.execute(f"SELECT id FROM {table} WHERE {col} = ? COLLATE NOCASE ORDER BY id LIMIT 1",
+                            (name,)).fetchone()
+        if r:
+            if extra is not None:
+                self.fill(table, r[0], extra, kind)
+            return r[0]
+        data = clean(table, {col: name, **(extra or {})}, partial=True)
+        new = self.db.execute(f"INSERT INTO {table} ({', '.join(data)}) VALUES ({', '.join('?' for _ in data)})",
+                              list(data.values())).lastrowid
+        self.count("crees", kind, new)
+        return new
+
+    def platforms(self, text):
+        text = " ".join(str(text or "").split())
+        if not text:
+            return []
+        if self.db.execute("SELECT 1 FROM platforms WHERE name = ? COLLATE NOCASE", (text,)).fetchone():
+            parts = [text]
+        else:
+            parts = [p.strip() for p in re.split(r"\s*(?:/|,|\+|、)\s*", text) if p.strip()]
+        return [self.by_name("platforms", p, "plateformes") for p in parts]
+
+    def issue(self, magazine, number, date="", owned=True):
+        mid = self.by_name("magazines", magazine, "magazines")
+        number = str(number).strip()
+        known = self.db.execute("SELECT id FROM issues WHERE magazine_id = ? AND number = ?", (mid, number)).fetchone()
+        iid = ensure_issue(self.db, mid, number, date, owned=owned)
+        self.count("deja" if known else "crees", "numéros", iid)
+        return iid
+
+    @staticmethod
+    def date(v):
+        v = str(v or "").strip()
+        if re.fullmatch(r"\d{5}(\.\d+)?", v):  # date Excel (nombre de jours depuis 1899-12-30)
+            from datetime import timedelta
+            return (datetime(1899, 12, 30) + timedelta(days=int(float(v)))).strftime("%Y-%m-%d")
+        return v
+
+    @staticmethod
+    def num(v):
+        v = str(v or "").strip().replace(",", ".")
+        return v
+
+    # --- un type de ligne = une méthode ---
+    def row_magazines(self, r):
+        extra = {k: r.get(k, "") for k in ("publisher", "frequency", "start_year", "end_year", "total_issues", "notes")}
+        if r.get("platform"):
+            extra["platform_id"] = self.platforms(r["platform"])[0]
+        extra = clean("magazines", {k: self.num(v) if k.endswith(("year", "issues")) else v
+                                    for k, v in extra.items()}, partial=True)
+        self.by_name("magazines", r["name"], "magazines", {k: v for k, v in extra.items() if v not in ("", None)})
+
+    def row_numeros(self, r):
+        owned = str(r.get("owned", "")).strip().lower()
+        # « non » crée un numéro manquant ; un numéro déjà possédé le reste (on ne retire rien)
+        iid = self.issue(r["magazine"], r["number"], "", owned=(owned in YES) if owned else True)
+        vals = clean("issues", {"date": self.date(r.get("date")), "pages": self.num(r.get("pages")),
+                                "notes": r.get("notes", "")}, partial=True)
+        cur_row = self.db.execute("SELECT date, pages, notes FROM issues WHERE id = ?", (iid,)).fetchone()
+        sets = {k: v for k, v in vals.items() if k != "date_label" and v not in ("", None) and cur_row[k] in ("", None)}
+        if sets:
+            if "date" in sets:
+                sets["date_label"] = vals["date_label"]
+            self.db.execute(f"UPDATE issues SET {', '.join(k + ' = ?' for k in sets)} WHERE id = ?",
+                            list(sets.values()) + [iid])
+
+    def row_jeux(self, r):
+        extra = {k: r.get(k, "") for k in ("original_title", "romaji", "publisher", "genre", "licence", "notes")}
+        if r.get("year"):
+            extra["year"] = self.num(r["year"])
+        if r.get("series"):
+            extra["series_id"] = self.by_name("series", r["series"], "séries")
+        extra = clean("games", extra, partial=True)
+        return self.by_name("games", r["title"], "jeux", {k: v for k, v in extra.items() if v not in ("", None)})
+
+    def find_ad(self, game_id, description):
+        for a in self.db.execute("SELECT id, description FROM ads WHERE game_id = ? ORDER BY id", (game_id,)):
+            if " ".join(a["description"].split()).lower() == " ".join(description.split()).lower():
+                return a["id"]
+        return None
+
+    def ad(self, r, game_id):
+        ref = re.match(r"\s*#?(\d+)", str(r.get("ad_ref", "")))
+        if ref and ref[1] in self.ad_map:
+            return self.ad_map[ref[1]]
+        desc = " ".join(str(r.get("description", "")).split())
+        aid = self.find_ad(game_id, desc)
+        if aid:
+            self.count("deja", "pubs", aid)
+        else:
+            data = clean("ads", {"game_id": game_id, "description": desc, "pages": self.num(r.get("pages")),
+                                 "notes": r.get("notes_pub", "")})
+            aid = self.db.execute("INSERT INTO ads(game_id, description, pages, notes) VALUES (?, ?, ?, ?)",
+                                  (data["game_id"], data["description"], data["pages"], data["notes"])).lastrowid
+            set_ad_platforms(self.db, aid, self.platforms(r.get("platforms")))
+            self.count("crees", "pubs", aid)
+        if ref:
+            self.ad_map[ref[1]] = aid
+        return aid
+
+    def row_pubs(self, r):
+        gid = self.row_jeux({"title": r["game"]})
+        self.ad({**r, "notes_pub": r.get("notes", "")}, gid)
+
+    def known_ad(self, r):
+        ref = re.match(r"\s*#?(\d+)", str(r.get("ad_ref", "")))
+        return self.ad_map.get(ref[1]) if ref else None
+
+    def row_parutions(self, r):
+        aid = self.known_ad(r)  # ancien classeur : la pub est déjà importée (onglet Pubs)
+        if not aid:
+            gid = self.row_jeux({"title": r["game"], "original_title": r.get("original_title", ""),
+                                 "series": r.get("series", "")})
+            aid = self.ad(r, gid)
+        iid = self.issue(r["magazine"], r["number"], self.date(r.get("date")))
+        page = str(r.get("page", "")).strip()
+        if self.db.execute("SELECT 1 FROM appearances WHERE ad_id = ? AND issue_id = ? AND page = ?",
+                           (aid, iid, page)).fetchone():
+            self.count("deja", "parutions")
+            return
+        sale = 1 if str(r.get("for_sale", "")).strip().lower() in SALE_YES else 0
+        self.db.execute("INSERT INTO appearances(ad_id, issue_id, page, for_sale, notes) VALUES (?, ?, ?, ?, ?)",
+                        (aid, iid, page, sale, r.get("notes", "")))
+        self.count("crees", "parutions")
+
+    def run(self, kind, rows, mapping, skip_examples=False, first_line=2):
+        fields = IMPORT_TYPES[kind]["fields"]
+        missing = [label for key, label, req, _ in fields if req and key not in mapping]
+        if missing:
+            raise ApiError(400, "Colonne obligatoire non choisie : " + ", ".join(missing))
+        handler = getattr(self, "row_" + kind)
+        for line_no, raw in enumerate(rows, start=first_line):
+            r = {key: (raw[k] if 0 <= k < len(raw) else "") for key, k in mapping.items()}
+            if not any(str(v).strip() for v in r.values()):
+                continue
+            if skip_examples and any(str(v).upper().startswith("EXEMPLE") for v in raw):
+                self.report["ignorees"] += 1
+                continue
+            empty = [label for key, label, req, _ in fields if req and not str(r.get(key, "")).strip()
+                     and not (key == "game" and self.known_ad(r))]
+            if empty:
+                self.report["erreurs"].append({"onglet": self.sheet, "ligne": line_no, "message": "vide : " + ", ".join(empty)})
+                continue
+            self.db.execute("SAVEPOINT ligne")
+            try:
+                handler(r)
+                self.db.execute("RELEASE ligne")
+            except (ApiError, sqlite3.Error) as e:
+                self.db.execute("ROLLBACK TO ligne")
+                self.db.execute("RELEASE ligne")
+                msg = e.msg if isinstance(e, ApiError) else str(e)
+                self.report["erreurs"].append({"onglet": self.sheet, "ligne": line_no, "message": msg})
+
+
+def import_apply(body):
+    """Import (ou essai à blanc si body["essai"]) dans le projet courant."""
+    sheets = {n: (rows, first) for n, rows, first in read_table_file(str(body.get("name") or ""),
+                                                                     decode_b64(body.get("data")) or b"")}
+    essai = bool(body.get("essai"))
+    if not essai:
+        backup_on_start(cur())  # copie de la base avant d'importer
+    db = sqlite3.connect(cur().db_path, timeout=15, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
+    imp = Importer(db)
+    try:
+        db.execute("BEGIN")
+        if body.get("classeur"):  # ancien classeur BDD Pubs : tous les onglets, dans l'ordre
+            by_norm = {_hnorm(n): v for n, v in sheets.items()}
+            for sheet, kind in (("magazines", "magazines"), ("numeros", "numeros"), ("jeux", "jeux"),
+                                ("pubs", "pubs"), ("apparitions", "parutions")):
+                rows, first = by_norm.get(sheet, (None, 1))
+                if rows:
+                    m = guess_mapping(kind, rows[0])
+                    if kind == "numeros":
+                        m.pop("owned", None)
+                    imp.sheet = next(n for n in sheets if _hnorm(n) == sheet)
+                    imp.run(kind, rows[1:], m, skip_examples=True, first_line=first + 1)
+        else:
+            kind = body.get("type")
+            if kind not in IMPORT_TYPES:
+                raise ApiError(400, "Type d'import inconnu")
+            rows, first = sheets.get(body.get("sheet")) or next(iter(sheets.values()))
+            mapping = {k: int(v) for k, v in (body.get("mapping") or {}).items() if str(v).lstrip("-").isdigit() and int(v) >= 0}
+            imp.sheet = body.get("sheet") if len(sheets) > 1 else ""
+            imp.run(kind, rows[1:], mapping, first_line=first + 1)
+        db.execute("ROLLBACK" if essai else "COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    finally:
+        db.close()
+    return {**imp.report, "essai": essai}
+
+
 def build_backup():
     """ZIP complet : base + images + miniatures. Renvoie le chemin du fichier temporaire."""
     tmpdir = tempfile.mkdtemp(prefix="bddpubs_")
@@ -2089,6 +2569,11 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and head == "meta":
             return self.send_json({"platforms": list_platforms(db, {}), "series": list_series(db, {}),
                                    "magazines": list_magazines(db, {}), **filter_values(db)})
+        if head == "import" and method == "POST" and len(parts) == 2 and parts[1] in ("lire", "appliquer"):
+            body = self.read_json()
+            if parts[1] == "lire":
+                return self.send_json(import_preview(str(body.get("name") or ""), decode_b64(body.get("data")) or b""))
+            return self.send_json(import_apply(body))
         if method == "GET" and head == "stats":
             return self.send_json(stats(db, qs))
         if head == "magazines" and rid and len(parts) == 3 and parts[2] == "generer" and method == "POST":

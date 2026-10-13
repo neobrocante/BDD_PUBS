@@ -1767,7 +1767,8 @@ async function pageExport(view) {
     ['pubs', 'Pubs'], ['jeux', 'Jeux'], ['magazines', 'Magazines'], ['numeros', 'Numéros'],
     ['series', 'Séries'], ['plateformes', 'Plateformes']];
   view.innerHTML = `
-    <div class="page-head"><div><h1>Export, sauvegarde &amp; téléphone</h1></div></div>
+    <div class="page-head"><div><h1>Import, export, sauvegarde &amp; téléphone</h1></div></div>
+    <div class="card" id="import-card"></div>
     <div class="grid-2">
       <div class="card"><h2>Exports Excel (CSV)</h2>
         <p class="muted">Fichiers CSV (séparateur « ; ») qui s'ouvrent directement dans Excel ou LibreOffice.
@@ -1789,6 +1790,7 @@ async function pageExport(view) {
           <input type="checkbox" id="net"> Rendre l'application accessible depuis le téléphone</label>
         <div id="net-info" style="margin-top:10px"></div></div>
     </div>`;
+  importBlock($('#import-card', view));
   const box = $('#net', view), info = $('#net-info', view);
   const show = st => {
     box.checked = st.actif;
@@ -1803,6 +1805,92 @@ async function pageExport(view) {
   box.addEventListener('change', async () => {
     try { show(await POST('reseau', { actif: box.checked })); }
     catch (e) { toast(e.message, 'err'); box.checked = false; }
+  });
+}
+
+// Import de listes Excel (.xlsx) / CSV : aperçu, choix des colonnes, essai, import
+function importBlock(card) {
+  card.innerHTML = `<h2>Importer depuis Excel ou CSV</h2>
+    <p class="muted">Ajoute des parutions, jeux, magazines, numéros (catalogue) ou pubs depuis un fichier <b>.xlsx</b> ou <b>.csv</b>
+    (par exemple un export de cette application, ou l'ancien fichier Excel « BDD Pubs »). Ce qui existe déjà n'est jamais
+    remplacé : il est seulement complété. Une copie de la base est faite avant chaque import.</p>
+    <label class="btn primary" style="display:inline-block">📄 Choisir un fichier…<input type="file" accept=".xlsx,.csv,.txt" hidden></label>
+    <div id="imp-body" style="margin-top:12px"></div>`;
+  const body = $('#imp-body', card);
+  let file = null, info = null;
+  const one = k => k === 'jeux' ? 'jeu' : k.replace(/s$/, '');
+  const fmtCounts = o => Object.entries(o || {}).map(([k, n]) => `<b>${n}</b> ${esc(n > 1 ? k : one(k))}`).join(', ') || 'rien';
+  const reportHtml = r => `<div class="import-report">
+      <div>${r.essai ? 'Seront créés' : '<b>Créés</b>'} : ${fmtCounts(r.crees)}</div>
+      ${Object.keys(r.completes).length ? `<div>${r.essai ? 'Seront complétés' : 'Complétés'} (champs vides remplis) : ${fmtCounts(r.completes)}</div>` : ''}
+      ${Object.keys(r.deja).length ? `<div class="muted">Déjà présents (inchangés) : ${fmtCounts(r.deja)}</div>` : ''}
+      ${r.ignorees ? `<div class="muted">${plural(r.ignorees, 'ligne d\'exemple ignorée', 'lignes d\'exemple ignorées')}</div>` : ''}
+      ${r.erreurs.length ? `<div class="warn">${plural(r.erreurs.length, 'ligne non importée', 'lignes non importées')} :</div>
+        <ul class="err-list">${r.erreurs.slice(0, 50).map(e => `<li>${e.onglet ? esc(e.onglet) + ', ' : ''}ligne ${e.ligne} : ${esc(e.message)}</li>`).join('')}
+        ${r.erreurs.length > 50 ? `<li>… et ${r.erreurs.length - 50} autres</li>` : ''}</ul>` : ''}</div>`;
+
+  function draw() {
+    if (info.classeur) {
+      body.innerHTML = `<p><span class="badge ok">ancien classeur BDD Pubs reconnu</span> Les onglets Magazines, Numéros, Jeux, Pubs et
+        Apparitions seront importés ensemble (les lignes « EXEMPLE » sont ignorées).</p>
+        <div class="btns"><button type="button" id="imp-try">Vérifier (sans rien enregistrer)</button>
+        <button type="button" class="primary" id="imp-go" disabled>Importer</button>
+        <button type="button" id="imp-manual">Choisir un onglet à la place…</button></div><div id="imp-rep"></div>`;
+      $('#imp-manual', body).onclick = () => { info.classeur = false; draw(); };
+      return wire({ classeur: true });
+    }
+    const sh = info.sheets[info.sel || 0];
+    const type = info.type || sh.type;
+    const map = info.map || { ...sh.mapping[type] };
+    info.map = map;
+    const T = info.types[type];
+    const colOpt = sel => `<option value="-1">— ignorer —</option>` + sh.headers.map((h, k) =>
+      `<option value="${k}" ${sel === k ? 'selected' : ''}>${esc(h || `colonne ${k + 1}`)}</option>`).join('');
+    body.innerHTML = `
+      <div class="form imp-head">
+        ${info.sheets.length > 1 ? `<label class="field"><span>Onglet</span><select id="imp-sheet">${info.sheets.map((x, k) =>
+          `<option value="${k}" ${k === (info.sel || 0) ? 'selected' : ''}>${esc(x.name)} (${x.count} lignes)</option>`).join('')}</select></label>` : ''}
+        <label class="field"><span>Ce fichier contient des…</span><select id="imp-type">${Object.entries(info.types).map(([k, t]) =>
+          `<option value="${k}" ${k === type ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select></label>
+      </div>
+      <h3>Colonnes</h3><p class="muted small">Colonne du fichier à utiliser pour chaque information (reconnue automatiquement d'après son titre).</p>
+      <div class="imp-map">${T.fields.map(f => `<label class="field"><span>${esc(f.label)}${f.required ? ' <b class="req">*</b>' : ''}</span>
+        <select data-k="${f.key}">${colOpt(map[f.key] ?? -1)}</select></label>`).join('')}</div>
+      <h3>Aperçu (${plural(sh.count, 'ligne')})</h3>
+      <div class="table-wrap"><table class="data small"><thead><tr>${sh.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${sh.rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <div class="btns" style="margin-top:10px"><button type="button" id="imp-try">Vérifier (sans rien enregistrer)</button>
+        <button type="button" class="primary" id="imp-go" disabled>Importer</button></div><div id="imp-rep"></div>`;
+    $('#imp-sheet', body)?.addEventListener('change', e => { info.sel = +e.target.value; info.type = null; info.map = null; draw(); });
+    $('#imp-type', body).onchange = e => { info.type = e.target.value; info.map = { ...sh.mapping[info.type] }; draw(); };
+    $$('.imp-map select', body).forEach(sel => sel.onchange = () => { map[sel.dataset.k] = +sel.value; $('#imp-go', body).disabled = true; });
+    wire({ type, sheet: sh.name, get mapping() { return map; } });
+  }
+  function wire(opts) {
+    const send = async essai => {
+      const rep = $('#imp-rep', body);
+      rep.innerHTML = '<p class="muted">Lecture en cours…</p>';
+      try {
+        const r = await POST('import/appliquer', { name: file.name, data: file.data, essai, classeur: !!opts.classeur,
+          type: opts.type, sheet: opts.sheet, mapping: opts.mapping });
+        rep.innerHTML = reportHtml(r);
+        if (essai) $('#imp-go', body).disabled = !Object.keys(r.crees).length && !Object.keys(r.completes).length;
+        else { invalidate(); $('#imp-go', body).disabled = true; toast('Import terminé'); }
+      } catch (e) { rep.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+    };
+    $('#imp-try', body).onclick = () => send(true);
+    $('#imp-go', body).onclick = () => send(false);
+  }
+  $('input[type=file]', card).addEventListener('change', async e => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    body.innerHTML = '<p class="muted">Lecture du fichier…</p>';
+    try {
+      file = { name: f.name, data: await readDataURL(f) };
+      info = await POST('import/lire', file);
+      draw();
+    } catch (ex) { body.innerHTML = `<p class="warn">${esc(ex.message)}</p>`; }
   });
 }
 

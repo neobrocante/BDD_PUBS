@@ -429,6 +429,14 @@ table.stats .bar-col { width: 34%; min-width: 140px; white-space: nowrap; }
 .hbar-v { margin-left: 6px; font-variant-numeric: tabular-nums; font-size: 12px; }
 label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
 
+/* ---------- Import ---------- */
+.imp-head { max-width: 640px; }
+.imp-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; margin-bottom: 8px; }
+table.data.small td, table.data.small th { font-size: 12px; padding: 3px 6px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.import-report { margin-top: 10px; padding: 10px 12px; background: var(--panel-2); border-radius: 8px; display: grid; gap: 4px; }
+.import-report .warn, p.warn { color: var(--no); font-weight: 600; }
+.err-list { margin: 0; padding-left: 18px; max-height: 220px; overflow: auto; font-size: 12px; }
+
 /* ---------- Écrans de portable (14 pouces : ~1280×720 à 1366×768 utiles) ----------
    Tout est resserré pour que la saisie tienne sans faire défiler. */
 @media (max-width: 1500px), (max-height: 850px) {

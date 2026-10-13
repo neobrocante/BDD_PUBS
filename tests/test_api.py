@@ -225,6 +225,66 @@ check(s == 201 and counts(imp["id"])["appearances"] == 9, "export puis import d'
 s, r = call("DELETE", "/api/projets/principal")
 check(s == 409, "le projet de base ne peut pas être supprimé")
 
+section("Import Excel / CSV")
+def b64(path):
+    return base64.b64encode(open(path, "rb").read()).decode()
+xl = b64(os.path.join(TMP, "catalogue.xlsx"))
+s, pv = call("POST", "/api/import/lire", {"name": "catalogue.xlsx", "data": xl})
+check(s == 200 and [x["name"] for x in pv["sheets"]] == ["Liste", "Jeux"] and not pv["classeur"], "classeur .xlsx lu (2 onglets)")
+liste = pv["sheets"][0]
+check(liste["type"] == "numeros" and liste["mapping"]["numeros"] == {"magazine": 0, "number": 1, "date": 2, "owned": 3},
+      f"onglet reconnu comme numéros, colonnes associées ({liste['type']}, {liste['mapping']['numeros']})")
+check(pv["sheets"][1]["rows"][0][1] == "トバルNo.1", "texte japonais lu sans la lecture furigana")
+before = counts()
+args = {"name": "catalogue.xlsx", "data": xl, "type": "numeros", "sheet": "Liste", "mapping": liste["mapping"]["numeros"]}
+s, r = call("POST", "/api/import/appliquer", {**args, "essai": True})
+check(r["essai"] and r["crees"] == {"magazines": 1, "numéros": 3} and len(r["erreurs"]) == 1 and r["erreurs"][0]["ligne"] == 6,
+      f"essai : 1 magazine et 3 numéros à créer, 1 ligne en erreur signalée ({r})")
+check(counts() == before, "essai : rien n'est enregistré")
+s, r = call("POST", "/api/import/appliquer", args)
+mag = [m for m in get("/api/magazines") if m["name"] == "Hippon Super"][0]
+iss = {i["number"]: i for i in get(f"/api/magazines/{mag['id']}")["issues"]}
+check(set(iss) == {"1", "2", "3"} and iss["1"]["owned"] == 1 and iss["2"]["owned"] == 0 and iss["3"]["owned"] == 1,
+      "numéros importés avec possédé / manquant")
+check(iss["1"]["date_label"] == "juillet-août 1996" and iss["2"]["date"] == "1996-12-01", "dates libres et dates Excel converties")
+s, r = call("POST", "/api/import/appliquer", args)
+check(not r["crees"] and r["deja"].get("numéros") == 3, "réimporter le même fichier ne crée pas de doublons")
+s, r = call("POST", "/api/import/appliquer", {"name": "catalogue.xlsx", "data": xl, "type": "jeux", "sheet": "Jeux",
+                                             "mapping": pv["sheets"][1]["mapping"]["jeux"]})
+ff7 = get("/api/games?q=Final%20Fantasy%20VII")[0]
+check(r["crees"] == {"jeux": 1} and r["completes"] == {"jeux": 1} and ff7["licence"] == "Final Fantasy" and ff7["publisher"] == "Square",
+      f"jeux : 1 créé, 1 existant complété sans rien remplacer ({r['crees']}, {r['completes']})")
+csvw = b64(os.path.join(TMP, "jeux_windows.csv"))
+s, pv = call("POST", "/api/import/lire", {"name": "jeux_windows.csv", "data": csvw})
+m = pv["sheets"][0]["mapping"]["jeux"]
+s, r = call("POST", "/api/import/appliquer", {"name": "jeux_windows.csv", "data": csvw, "type": "jeux", "mapping": m})
+check(r["crees"].get("jeux") == 2 and "Éditeur" in pv["sheets"][0]["headers"]
+      and get("/api/games?licence=Gundam")[0]["year"] == 1996, "CSV Excel Windows (« ; », accents) importé")
+s, r = call("POST", "/api/import/appliquer", {"name": "x.csv", "data": csvw, "type": "parutions", "mapping": {"game": 0}})
+check(s == 400 and "Magazine" in r["error"], "colonne obligatoire non choisie : message clair")
+s, r = call("POST", "/api/import/lire", {"name": "vieux.xls", "data": csvw})
+check(s == 400 and ".xlsx" in r["error"], "ancien format .xls : explique comment faire")
+# Aller-retour : export CSV des parutions -> import dans un projet vide = mêmes chiffres
+with urllib.request.urlopen(BASE + "/api/export/apparitions.csv") as r_:
+    exp = r_.read()
+s, vide = call("POST", "/api/projets", {"nom": "Import test"})
+s, pv = call("POST", "/api/import/lire", {"name": "apparitions.csv", "data": base64.b64encode(exp).decode()}, projet=vide["id"])
+s, r = call("POST", "/api/import/appliquer", {"name": "apparitions.csv", "data": base64.b64encode(exp).decode(),
+                                             "type": "parutions", "mapping": pv["sheets"][0]["mapping"]["parutions"]},
+            projet=vide["id"])
+a, b = get("/api/search", )["stats"], get("/api/search", vide["id"])["stats"]
+check(not r["erreurs"] and (a["total"], a["ads"], a["games"], a["issues"], a["for_sale"], a["pages"])
+      == (b["total"], b["ads"], b["games"], b["issues"], b["for_sale"], b["pages"]),
+      f"export CSV puis import dans un projet vide : mêmes chiffres ({a} / {b})")
+# Ancien classeur BDD Pubs (fichier du dépôt : uniquement des lignes d'exemple)
+vx = b64(os.path.join(ROOT, "BDD_Pubs.xlsx"))
+s, pv = call("POST", "/api/import/lire", {"name": "BDD_Pubs.xlsx", "data": vx}, projet=vide["id"])
+check(pv["classeur"], "ancien classeur « BDD Pubs » reconnu")
+s, r = call("POST", "/api/import/appliquer", {"name": "BDD_Pubs.xlsx", "data": vx, "classeur": True, "essai": True},
+            projet=vide["id"])
+check(r["ignorees"] > 10 and not r["erreurs"] and not r["crees"].get("parutions"), "lignes « EXEMPLE » ignorées")
+call("DELETE", f"/api/projets/{vide['id']}")
+
 section("Tout exporter / Tout restaurer")
 etat = lambda: sorted((p["nom"], (p["stats"] or {}).get("appearances")) for p in get("/api/projets")["projets"])
 ref = etat()

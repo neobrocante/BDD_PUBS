@@ -65,9 +65,9 @@ ouverte pendant que l'application était arrêtée, elle se reconnecte toute seu
 | **Jeux** | Liste triable (nb de pubs, de parutions, 1re parution). Fiche : toutes ses pubs et toutes ses parutions. |
 | **Magazines** | Magazines > numéros > **les publicités de chaque numéro**, avec la couverture. Pages de pub au total et **en moyenne par numéro**, complétude de la collection. |
 | **Catalogue** | **Tous les magazines parus, même ceux que vous n'avez pas** : nombre de numéros parus, numéros possédés / manquants, « il me manque N numéros » (liste copiable). |
-| **Statistiques** | Chiffres regroupés par magazine, plateforme, éditeur, type de jeu, licence, série, année… avec filtres combinables et barres. |
+| **Stats** | Chiffres regroupés par magazine, plateforme, éditeur, type de jeu, licence, série, année… avec filtres combinables et barres. |
 | **Listes** | Séries et plateformes (plateformes japonaises déjà remplies). |
-| **Export** | CSV pour Excel (toutes les tables) et **sauvegarde complète en ZIP** (base + images). |
+| **Import / Export** | **Importer** des listes Excel (.xlsx) ou CSV ; exports CSV pour Excel (toutes les tables) et **sauvegarde complète en ZIP** (base + images). |
 
 ### Images
 
@@ -130,6 +130,23 @@ Les magazines ne sont pas pré-remplis : c'est à vous de compléter le catalogu
 Fiche d'un jeu : **type de jeu** (RPG, action…) et **licence** (Dragon Ball, Gundam… : différente
 de la série de jeux). Les valeurs déjà utilisées sont proposées en tapant. Elles servent de filtres
 dans la Recherche, la liste des Jeux et les Statistiques.
+
+### Importer depuis Excel ou CSV
+
+Page **Import / Export** > « Choisir un fichier… » (`.xlsx` ou `.csv`) :
+
+1. L'application devine ce que contient le fichier (parutions, jeux, magazines, numéros du
+   catalogue, pubs) et à quoi correspond chaque colonne, d'après les titres de colonnes. On peut
+   corriger ces choix ; un aperçu des premières lignes est affiché.
+2. **Vérifier** : montre ce qui serait créé ou complété, et les lignes à problème (avec leur
+   numéro), **sans rien enregistrer**.
+3. **Importer** : les magazines, numéros, jeux, séries, plateformes et pubs manquants sont créés.
+   Ce qui existe déjà n'est **jamais remplacé** (seules les cases vides sont complétées) ; importer
+   deux fois le même fichier ne crée pas de doublons. Une copie de la base est faite juste avant.
+
+L'**ancien fichier Excel « BDD Pubs »** est reconnu : tous ses onglets sont importés d'un coup
+(les lignes « EXEMPLE » sont ignorées). Les fichiers `.xls` ou `.ods` sont à enregistrer d'abord
+au format `.xlsx` (« Enregistrer sous » dans Excel ou LibreOffice).
 
 ## Projets
 
