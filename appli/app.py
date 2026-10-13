@@ -69,7 +69,7 @@ DATA_DIR = os.environ.get("BDD_PUBS_DATA") or default_data_dir()
 LEGACY_DATA_DIR = os.path.join(HERE, "data")  # anciennes versions : données à côté du programme
 DEFAULT_BACKUP_DIR = os.environ.get("BDD_PUBS_SAUVEGARDES") or os.path.join(documents_dir(), "BDD Pubs - sauvegardes")
 
-APP_VERSION = "2026.10.13.1"
+APP_VERSION = "2026.10.13.2"
 
 
 def build_id():
@@ -202,7 +202,22 @@ INSERT INTO ad_platforms(ad_id, platform_id) SELECT id, platform_id FROM ads WHE
 UPDATE ads SET platform_id = NULL;
 """
 
-MIGRATIONS = [SCHEMA_V1, SCHEMA_V2]
+# V3 : dates libres (« 8 et 15 avril 1997 »), statistiques, catalogue de magazines, romaji.
+SCHEMA_V3 = """
+ALTER TABLE issues ADD COLUMN date_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE issues ADD COLUMN pages INTEGER;
+ALTER TABLE issues ADD COLUMN owned INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE games ADD COLUMN genre TEXT NOT NULL DEFAULT '';
+ALTER TABLE games ADD COLUMN licence TEXT NOT NULL DEFAULT '';
+ALTER TABLE games ADD COLUMN romaji TEXT NOT NULL DEFAULT '';
+ALTER TABLE games ADD COLUMN wikidata TEXT NOT NULL DEFAULT '';
+ALTER TABLE magazines ADD COLUMN start_year INTEGER;
+ALTER TABLE magazines ADD COLUMN end_year INTEGER;
+ALTER TABLE magazines ADD COLUMN total_issues INTEGER;
+ALTER TABLE magazines ADD COLUMN platform_id INTEGER REFERENCES platforms(id) ON DELETE SET NULL;
+"""
+
+MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3]
 
 PLATFORMS = [
     ("Famicom", "Nintendo"), ("Famicom Disk System", "Nintendo"), ("Super Famicom", "Nintendo"),
@@ -512,11 +527,15 @@ SPEC = {
     "platforms": {"name": ("text", True), "maker": ("text", False), "notes": ("text", False)},
     "series": {"name": ("text", True), "notes": ("text", False)},
     "magazines": {"name": ("text", True), "publisher": ("text", False),
-                  "frequency": ("text", False), "notes": ("text", False)},
+                  "frequency": ("text", False), "notes": ("text", False),
+                  "start_year": ("int", False), "end_year": ("int", False),
+                  "total_issues": ("int", False), "platform_id": ("fk", False)},
     "issues": {"magazine_id": ("fk", True), "number": ("text", True), "date": ("date", False),
-               "notes": ("text", False)},
+               "notes": ("text", False), "pages": ("int", False), "owned": ("bool", False)},
     "games": {"title": ("text", True), "original_title": ("text", False), "series_id": ("fk", False),
-              "publisher": ("text", False), "year": ("int", False), "notes": ("text", False)},
+              "publisher": ("text", False), "year": ("int", False), "notes": ("text", False),
+              "genre": ("text", False), "licence": ("text", False), "romaji": ("text", False),
+              "wikidata": ("text", False)},
     "ads": {"game_id": ("fk", True), "description": ("text", False),
             "pages": ("real", False), "notes": ("text", False)},
     "appearances": {"ad_id": ("fk", True), "issue_id": ("fk", True), "page": ("text", False),
@@ -526,8 +545,99 @@ SPEC = {
 LABELS = {
     "name": "Nom", "number": "Numéro", "title": "Titre", "magazine_id": "Magazine",
     "game_id": "Jeu", "ad_id": "Pub", "issue_id": "Numéro", "date": "Date", "year": "Année",
-    "pages": "Nb pages",
+    "pages": "Nb pages", "start_year": "Première année", "end_year": "Dernière année",
+    "total_issues": "Nombre de numéros parus", "platform_id": "Plateforme",
 }
+
+
+# ---------------------------------------------------------------------------
+# Dates de parution en texte libre : « 8 et 15 avril 1997 », « juillet-août 1996 »,
+# « 1997年4月8・15日号 », « 08/04/1997 »… On garde le texte tel quel (date_label) et on en
+# déduit une date triable AAAA[-MM[-JJ]] (le premier jour reconnu) pour le tri et les statistiques.
+# ---------------------------------------------------------------------------
+MONTHS = {
+    "janvier": 1, "janv": 1, "jan": 1, "january": 1,
+    "fevrier": 2, "fevr": 2, "fev": 2, "february": 2, "feb": 2,
+    "mars": 3, "march": 3, "mar": 3,
+    "avril": 4, "avr": 4, "april": 4, "apr": 4,
+    "mai": 5, "may": 5,
+    "juin": 6, "june": 6, "jun": 6,
+    "juillet": 7, "juil": 7, "july": 7, "jul": 7,
+    "aout": 8, "august": 8, "aug": 8,
+    "septembre": 9, "sept": 9, "sep": 9, "september": 9,
+    "octobre": 10, "oct": 10, "october": 10,
+    "novembre": 11, "nov": 11, "november": 11,
+    "decembre": 12, "dec": 12, "december": 12,
+}
+
+
+def _valid(y, m=None, d=None):
+    try:
+        datetime(y, m or 1, d or 1)
+        return 1000 <= y <= 2999
+    except ValueError:
+        return False
+
+
+def _iso(y, m=None, d=None):
+    if m and d and _valid(y, m, d):
+        return f"{y:04d}-{m:02d}-{d:02d}"
+    if m and _valid(y, m):
+        return f"{y:04d}-{m:02d}"
+    return f"{y:04d}"
+
+
+def parse_issue_date(text):
+    """Texte libre -> (date triable, libellé à afficher). Lève ValueError si aucune année."""
+    text = " ".join(str(text or "").split())
+    if not text:
+        return "", ""
+    if DATE_RE.match(text):
+        return text, ""
+    t = unicodedata.normalize("NFKC", text)  # chiffres pleine chasse -> ASCII
+    # Formes numériques : AAAA-M-J, AAAA/MM/JJ, AAAA.MM
+    m = re.search(r"(?<!\d)(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?(?!\d)", t)
+    if m and _valid(int(m[1]), int(m[2])):
+        return _iso(int(m[1]), int(m[2]), int(m[3]) if m[3] else None), text
+    # JJ/MM/AAAA, MM/AAAA
+    m = re.search(r"(?<!\d)(?:(\d{1,2})[/.-])?(\d{1,2})[/.-](\d{4})(?!\d)", t)
+    if m and _valid(int(m[3]), int(m[2])):
+        return _iso(int(m[3]), int(m[2]), int(m[1]) if m[1] else None), text
+    # Japonais : 1997年4月8・15日号, 1996年7・8月合併号, 平成 non géré (année occidentale attendue)
+    m = re.search(r"(\d{4})\s*年(?:\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?)?", t)
+    if m:
+        y, mo, d = int(m[1]), int(m[2]) if m[2] else None, int(m[3]) if m[3] else None
+        if not m[3] and mo:  # « 4月8・15日 » : le jour est après le mois
+            d2 = re.match(r"\s*(\d{1,2})", t[m.end():])
+            d = int(d2[1]) if d2 else None
+        if not mo:  # « 1996年7・8月 »
+            mo2 = re.match(r"\s*(\d{1,2})", t[m.end():])
+            mo = int(mo2[1]) if mo2 and 1 <= int(mo2[1]) <= 12 else None
+        if _valid(y):
+            return _iso(y, mo, d), text
+    # Texte (français / anglais) : premier mois cité, jour juste avant, année qui suit
+    low = "".join(c for c in unicodedata.normalize("NFKD", t.lower()) if not unicodedata.combining(c))
+    low = re.sub(r"\b1er\b", "1", low)
+    tokens = re.findall(r"[a-z]+|\d+", low)
+    month_at = next((k for k, w in enumerate(tokens) if w in MONTHS), None)
+    years = [(k, int(w)) for k, w in enumerate(tokens) if w.isdigit() and len(w) == 4]
+    if month_at is not None:
+        mo = MONTHS[tokens[month_at]]
+        after = [y for k, y in years if k > month_at]
+        y = after[0] if after else (years[0][1] if years else None)
+        if y is None:  # « avril 97 »
+            short = [int(w) for w in tokens[month_at + 1:] if w.isdigit() and len(w) == 2]
+            if short:
+                y = short[0] + (1900 if short[0] >= 70 else 2000)
+        if y is not None and _valid(y):
+            days = [int(w) for w in tokens[:month_at] if w.isdigit() and len(w) <= 2 and 1 <= int(w) <= 31]
+            nxt = tokens[month_at + 1] if month_at + 1 < len(tokens) else ""
+            if not days and nxt.isdigit() and len(nxt) <= 2 and 1 <= int(nxt) <= 31 and after:
+                days = [int(nxt)]  # « April 8-15, 1997 »
+            return _iso(y, mo, days[0] if days else None), text
+    if years and _valid(years[0][1]):
+        return _iso(years[0][1]), text
+    raise ValueError(text)
 
 
 def clean(table, data, partial=False):
@@ -544,6 +654,8 @@ def clean(table, data, partial=False):
             if required:
                 raise ApiError(400, f"Champ obligatoire : {LABELS.get(field, field)}")
             v = None if kind in ("fk", "int", "real") else (0 if kind == "bool" else "")
+            if kind == "date":
+                out["date_label"] = ""
         elif kind in ("fk", "int"):
             try:
                 v = int(v)
@@ -557,9 +669,11 @@ def clean(table, data, partial=False):
         elif kind == "bool":
             v = 1 if v in (True, 1, "1", "true", "oui", "○") else 0
         elif kind == "date":
-            v = str(v)
-            if not DATE_RE.match(v):
-                raise ApiError(400, "Date : format AAAA, AAAA-MM ou AAAA-MM-JJ attendu")
+            try:
+                v, out["date_label"] = parse_issue_date(v)
+            except ValueError:
+                raise ApiError(400, "Date : année introuvable (exemples : 1997-04-08, "
+                                    "« 8 et 15 avril 1997 », « juillet-août 1996 »)")
         else:
             v = str(v)
         out[field] = v
@@ -637,7 +751,7 @@ def list_series(db, qs):
 
 def list_magazines(db, qs, mid=None):
     where = "WHERE m.id = ?" if mid else ""
-    return rows(db.execute(f"""
+    res = rows(db.execute(f"""
         SELECT m.*,
           (SELECT COUNT(*) FROM issues i WHERE i.magazine_id = m.id) AS issues_count,
           (SELECT COUNT(*) FROM appearances ap JOIN issues i ON i.id = ap.issue_id
@@ -645,8 +759,25 @@ def list_magazines(db, qs, mid=None):
           (SELECT COUNT(*) FROM appearances ap JOIN issues i ON i.id = ap.issue_id
              WHERE i.magazine_id = m.id AND ap.for_sale = 1) AS sale_count,
           (SELECT MIN(NULLIF(i.date, '')) FROM issues i WHERE i.magazine_id = m.id) AS first_date,
-          (SELECT MAX(NULLIF(i.date, '')) FROM issues i WHERE i.magazine_id = m.id) AS last_date
+          (SELECT MAX(NULLIF(i.date, '')) FROM issues i WHERE i.magazine_id = m.id) AS last_date,
+          (SELECT COUNT(*) FROM issues i WHERE i.magazine_id = m.id AND i.owned = 1) AS owned_count,
+          (SELECT COUNT(DISTINCT ap.issue_id) FROM appearances ap JOIN issues i ON i.id = ap.issue_id
+             WHERE i.magazine_id = m.id) AS issues_with_ads,
+          (SELECT COALESCE(SUM(a.pages), 0) FROM appearances ap JOIN issues i ON i.id = ap.issue_id
+             JOIN ads a ON a.id = ap.ad_id WHERE i.magazine_id = m.id) AS ad_pages,
+          (SELECT p.name FROM platforms p WHERE p.id = m.platform_id) AS platform_name
         FROM magazines m {where} ORDER BY m.name""", (mid,) if mid else ()))
+    for m in res:
+        add_completeness(m)
+    return res
+
+
+def add_completeness(m):
+    """Complétude : numéros possédés / numéros parus (nombre indiqué, sinon numéros connus)."""
+    m["expected"] = max(m["total_issues"] or 0, m["issues_count"])
+    m["missing"] = m["expected"] - m["owned_count"]
+    m["avg_ad_pages"] = round(m["ad_pages"] / m["issues_with_ads"], 1) if m["issues_with_ads"] else None
+    return m
 
 
 def list_issues(db, qs, iid=None):
@@ -660,9 +791,14 @@ def list_issues(db, qs, iid=None):
     if qs.get("number") is not None and qs.get("magazine_id"):
         where.append("i.number = ?")
         params.append(qs["number"])
+    if qs.get("owned") in ("0", "1"):
+        where.append("i.owned = ?")
+        params.append(int(qs["owned"]))
     w = ("WHERE " + " AND ".join(where)) if where else ""
     return rows(db.execute(f"""
         SELECT i.*, m.name AS magazine_name,
+          (SELECT COALESCE(SUM(a.pages), 0) FROM appearances ap JOIN ads a ON a.id = ap.ad_id
+             WHERE ap.issue_id = i.id) AS ad_pages,
           (SELECT COUNT(*) FROM appearances ap WHERE ap.issue_id = i.id) AS app_count,
           (SELECT COUNT(*) FROM appearances ap WHERE ap.issue_id = i.id AND ap.for_sale = 1) AS sale_count,
           {img_url('issues', 'i.id')} AS thumb_url
@@ -677,11 +813,15 @@ def list_games(db, qs, gid=None):
         params.append(gid)
     if qs.get("q"):
         where.append("(g.title LIKE ? ESCAPE '\\' OR g.original_title LIKE ? ESCAPE '\\' "
-                     "OR g.publisher LIKE ? ESCAPE '\\')")
-        params += [like(qs["q"])] * 3
+                     "OR g.publisher LIKE ? ESCAPE '\\' OR g.romaji LIKE ? ESCAPE '\\')")
+        params += [like(qs["q"])] * 4
     if qs.get("series_id"):
         where.append("g.series_id = ?")
         params.append(qs["series_id"])
+    for key in ("genre", "licence", "publisher"):
+        if qs.get(key):
+            where.append(f"g.{key} = ? COLLATE NOCASE")
+            params.append(qs[key])
     w = ("WHERE " + " AND ".join(where)) if where else ""
     res = rows(db.execute(f"""
         SELECT g.*, s.name AS series_name,
@@ -716,8 +856,9 @@ def list_ads(db, qs, aid=None):
             params.append(int(q.lstrip("#")))
         else:
             where.append("(g.title LIKE ? ESCAPE '\\' OR g.original_title LIKE ? ESCAPE '\\' "
+                         "OR g.romaji LIKE ? ESCAPE '\\' "
                          "OR a.description LIKE ? ESCAPE '\\' OR a.notes LIKE ? ESCAPE '\\')")
-            params += [like(q)] * 4
+            params += [like(q)] * 5
     for key, col in (("game_id", "a.game_id"), ("series_id", "g.series_id")):
         if qs.get(key):
             where.append(f"{col} = ?")
@@ -730,7 +871,7 @@ def list_ads(db, qs, aid=None):
     w = ("WHERE " + " AND ".join(where)) if where else ""
     order = "a.id DESC" if qs.get("tri") == "recent" else "g.title COLLATE NOCASE, a.id"
     res = rows(db.execute(f"""
-        SELECT a.*, g.title AS game_title, g.original_title, g.series_id,
+        SELECT a.*, g.title AS game_title, g.original_title, g.romaji, g.series_id,
           {ad_platforms_sql('a.id')} AS platform_name, s.name AS series_name,
           (SELECT group_concat(platform_id) FROM ad_platforms x WHERE x.ad_id = a.id) AS platform_ids,
           (SELECT COUNT(*) FROM appearances ap WHERE ap.ad_id = a.id) AS app_count,
@@ -747,8 +888,8 @@ def list_ads(db, qs, aid=None):
     return res
 
 
-def search(db, qs, limit=None, offset=0):
-    """Recherche croisée sur les apparitions (une pub dans un numéro)."""
+def search_where(qs):
+    """Filtres de la recherche croisée (réutilisés par les statistiques)."""
     where, params = [], []
 
     def eq(key, col):
@@ -761,6 +902,11 @@ def search(db, qs, limit=None, offset=0):
     eq("numero", "i.number")
     eq("game_id", "a.game_id")
     eq("series_id", "g.series_id")
+    eq("annee_jeu", "g.year")
+    for key in ("genre", "licence", "publisher"):
+        if qs.get(key):
+            where.append(f"g.{key} = ? COLLATE NOCASE")
+            params.append(qs[key])
     if qs.get("platform_id"):
         where.append(has_platform_sql("a.id"))
         params.append(qs["platform_id"])
@@ -771,8 +917,9 @@ def search(db, qs, limit=None, offset=0):
         where.append("substr(i.date, 1, 4) = ?")
         params.append(qs["annee"])
     if qs.get("jeu"):
-        where.append("(g.title LIKE ? ESCAPE '\\' OR g.original_title LIKE ? ESCAPE '\\')")
-        params += [like(qs["jeu"])] * 2
+        where.append("(g.title LIKE ? ESCAPE '\\' OR g.original_title LIKE ? ESCAPE '\\' "
+                     "OR g.romaji LIKE ? ESCAPE '\\')")
+        params += [like(qs["jeu"])] * 3
     if qs.get("vente") in ("1", "0"):
         where.append("ap.for_sale = ?")
         params.append(int(qs["vente"]))
@@ -783,7 +930,12 @@ def search(db, qs, limit=None, offset=0):
     if qs.get("id"):
         where.append("ap.id = ?")
         params.append(qs["id"])
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+    return ("WHERE " + " AND ".join(where)) if where else "", params
+
+
+def search(db, qs, limit=None, offset=0):
+    """Recherche croisée sur les apparitions (une pub dans un numéro)."""
+    w, params = search_where(qs)
 
     tri = qs.get("tri", "")
     if tri == "recent":
@@ -798,8 +950,9 @@ def search(db, qs, limit=None, offset=0):
     lim = f"LIMIT {int(limit)} OFFSET {int(offset)}" if limit else ""
     items = rows(db.execute(f"""
         SELECT ap.id, ap.page, ap.for_sale, ap.notes, ap.ad_id, ap.issue_id, ap.created_at,
-          i.number, i.date, m.id AS magazine_id, m.name AS magazine,
-          g.id AS game_id, g.title AS game, g.original_title, {ad_platforms_sql('a.id')} AS platform,
+          i.number, i.date, i.date_label, m.id AS magazine_id, m.name AS magazine,
+          g.id AS game_id, g.title AS game, g.original_title, g.romaji, g.publisher, g.genre, g.licence,
+          g.year AS game_year, {ad_platforms_sql('a.id')} AS platform,
           s.id AS series_id, s.name AS series, a.description, a.pages,
           COALESCE({img_url('appearances', 'ap.id')}, {img_url('ads', 'a.id')}) AS thumb_url
         {APP_JOIN} {w} ORDER BY {order} {lim}""", params))
@@ -809,6 +962,78 @@ def search(db, qs, limit=None, offset=0):
           COALESCE(SUM(ap.for_sale), 0) AS for_sale, COALESCE(SUM(a.pages), 0) AS pages
         {APP_JOIN} {w}""", params))
     return {"items": items, "stats": st}
+
+
+# Statistiques : regroupements possibles (clé -> (identifiant, libellé, jointure en plus, tri))
+STAT_GROUPS = {
+    "magazine": ("m.id", "m.name", "", "label"),
+    "plateforme": ("p.id", "p.name", "LEFT JOIN ad_platforms x ON x.ad_id = a.id "
+                                     "LEFT JOIN platforms p ON p.id = x.platform_id", "n"),
+    "editeur": ("g.publisher", "g.publisher", "", "n"),
+    "genre": ("g.genre", "g.genre", "", "n"),
+    "licence": ("g.licence", "g.licence", "", "n"),
+    "serie": ("s.id", "s.name", "", "n"),
+    "annee": ("substr(i.date, 1, 4)", "substr(i.date, 1, 4)", "", "key"),
+    "annee_jeu": ("g.year", "g.year", "", "key"),
+    "jeu": ("g.id", "g.title", "", "n"),
+}
+
+
+def stats(db, qs):
+    """Chiffres (parutions, pubs, jeux, numéros, pages de pub) regroupés et filtrés."""
+    group = qs.get("par") or "magazine"
+    if group not in STAT_GROUPS:
+        raise ApiError(400, "Regroupement inconnu")
+    key, label, join, order = STAT_GROUPS[group]
+    w, params = search_where(qs)
+    order_sql = {"label": "label COLLATE NOCASE", "key": "key IS NULL OR key = '', key",
+                 "n": "n DESC, label COLLATE NOCASE"}[order]
+    groups = rows(db.execute(f"""
+        SELECT {key} AS key, {label} AS label, COUNT(*) AS n, COUNT(DISTINCT ap.ad_id) AS ads,
+          COUNT(DISTINCT a.game_id) AS games, COUNT(DISTINCT ap.issue_id) AS issues,
+          COALESCE(SUM(a.pages), 0) AS pages, COALESCE(SUM(ap.for_sale), 0) AS for_sale
+        {APP_JOIN} {join} {w} GROUP BY {key} ORDER BY {order_sql}""", params))
+    for g in groups:
+        g["pages_per_issue"] = round(g["pages"] / g["issues"], 1) if g["issues"] else None
+    total = search(db, qs, limit=1)["stats"]
+    total["pages_per_issue"] = round(total["pages"] / total["issues"], 1) if total["issues"] else None
+    return {"par": group, "groups": groups, "total": total}
+
+
+def filter_values(db):
+    """Valeurs déjà utilisées (listes de suggestions et filtres des statistiques)."""
+    def distinct(sql):
+        return [r[0] for r in db.execute(sql).fetchall()]
+    return {
+        "publishers": distinct("SELECT DISTINCT publisher FROM games WHERE publisher != '' ORDER BY publisher COLLATE NOCASE"),
+        "genres": distinct("SELECT DISTINCT genre FROM games WHERE genre != '' ORDER BY genre COLLATE NOCASE"),
+        "licences": distinct("SELECT DISTINCT licence FROM games WHERE licence != '' ORDER BY licence COLLATE NOCASE"),
+        "years": distinct("SELECT DISTINCT substr(date, 1, 4) FROM issues WHERE date != '' ORDER BY 1"),
+        "game_years": distinct("SELECT DISTINCT year FROM games WHERE year IS NOT NULL ORDER BY 1"),
+    }
+
+
+def magazine_years(db, mid):
+    """Complétude d'un magazine par année : numéros connus / possédés."""
+    return rows(db.execute("""
+        SELECT substr(date, 1, 4) AS year, COUNT(*) AS known, SUM(owned) AS owned
+        FROM issues WHERE magazine_id = ? GROUP BY 1 ORDER BY year IS NULL OR year = '', year""", (mid,)))
+
+
+def generate_issues(db, mid, first, last):
+    """Catalogue : crée les numéros first..last manquants, marqués « pas possédés »."""
+    try:
+        first, last = int(first), int(last)
+    except (TypeError, ValueError):
+        raise ApiError(400, "Numéros de début et de fin attendus")
+    if first < 0 or last < first or last - first > 5000:
+        raise ApiError(400, "Plage de numéros invalide (5000 au maximum)")
+    if not db.execute("SELECT 1 FROM magazines WHERE id = ?", (mid,)).fetchone():
+        raise ApiError(404, "Magazine introuvable")
+    have = {r[0] for r in db.execute("SELECT number FROM issues WHERE magazine_id = ?", (mid,))}
+    new = [(mid, str(n)) for n in range(first, last + 1) if str(n) not in have]
+    db.executemany("INSERT INTO issues(magazine_id, number, owned) VALUES (?, ?, 0)", new)
+    return len(new)
 
 
 def with_urls(im):
@@ -842,6 +1067,7 @@ def detail(db, table, rid):
         m = (list_magazines(db, {}, rid) or [None])[0]
         if m:
             m["issues"] = list_issues(db, {"magazine_id": rid})
+            m["years"] = magazine_years(db, rid)
         return m
     if table == "issues":
         i = (list_issues(db, {}, rid) or [None])[0]
@@ -873,20 +1099,25 @@ DELETE_CHECKS = {
 }
 
 
-def ensure_issue(db, magazine_id, number, date=""):
+def ensure_issue(db, magazine_id, number, date="", owned=True):
+    """Numéro existant ou créé. Saisir une pub dedans le marque « possédé » (catalogue)."""
     number = str(number or "").strip()
     if not magazine_id or not number:
         raise ApiError(400, "Magazine et numéro obligatoires")
-    r = db.execute("SELECT id, date FROM issues WHERE magazine_id = ? AND number = ?",
+    r = db.execute("SELECT id, date, owned FROM issues WHERE magazine_id = ? AND number = ?",
                    (magazine_id, number)).fetchone()
     if r:
         if date and not r["date"]:
             data = clean("issues", {"date": date}, partial=True)
-            db.execute("UPDATE issues SET date = ? WHERE id = ?", (data["date"], r["id"]))
+            db.execute("UPDATE issues SET date = ?, date_label = ? WHERE id = ?",
+                       (data["date"], data["date_label"], r["id"]))
+        if owned and not r["owned"]:
+            db.execute("UPDATE issues SET owned = 1 WHERE id = ?", (r["id"],))
         return r["id"]
     data = clean("issues", {"magazine_id": magazine_id, "number": number, "date": date or ""})
-    return db.execute("INSERT INTO issues(magazine_id, number, date) VALUES (?, ?, ?)",
-                      (data["magazine_id"], data["number"], data["date"])).lastrowid
+    return db.execute("INSERT INTO issues(magazine_id, number, date, date_label, owned) VALUES (?, ?, ?, ?, ?)",
+                      (data["magazine_id"], data["number"], data["date"], data["date_label"],
+                       1 if owned else 0)).lastrowid
 
 
 def delete_images(db, entity, eid):
@@ -959,7 +1190,8 @@ def dashboard(db):
             "ads": count("SELECT COUNT(*) FROM ads"),
             "games": count("SELECT COUNT(*) FROM games"),
             "magazines": count("SELECT COUNT(*) FROM magazines"),
-            "issues": count("SELECT COUNT(*) FROM issues"),
+            "issues": count("SELECT COUNT(*) FROM issues WHERE owned = 1"),
+            "issues_missing": count("SELECT COUNT(*) FROM issues WHERE owned = 0"),
             "series": count("SELECT COUNT(*) FROM series"),
             "images": count("SELECT COUNT(*) FROM images"),
             "for_sale": count("SELECT COUNT(*) FROM appearances WHERE for_sale = 1"),
@@ -1002,7 +1234,7 @@ def csv_appearances(items):
     return to_csv(
         ["ID", "Magazine", "Numéro", "Date", "Page", "Jeu", "Titre original", "Plateforme", "Série",
          "ID pub", "Description pub", "Nb pages", "En vente", "Remarques"],
-        [(r["id"], r["magazine"], r["number"], r["date"], r["page"], r["game"], r["original_title"],
+        [(r["id"], r["magazine"], r["number"], r["date_label"] or r["date"], r["page"], r["game"], r["original_title"],
           r["platform"], r["series"], r["ad_id"], r["description"], fmt_num(r["pages"]),
           "○" if r["for_sale"] else "×", r["notes"]) for r in items])
 
@@ -1017,20 +1249,26 @@ def export_csv(db, name, qs):
                         fmt_num(r["pages"]), r["notes"], r["app_count"], r["sale_count"], r["img_count"],
                         r["first_date"]) for r in list_ads(db, {})])
     if name == "jeux":
-        return to_csv(["ID", "Titre", "Titre original", "Série", "Éditeur", "Année", "Remarques",
-                       "Nb pubs", "Nb apparitions", "Dont en vente", "1re parution"],
-                      [(r["id"], r["title"], r["original_title"], r["series_name"], r["publisher"],
-                        r["year"], r["notes"], r["ads_count"], r["app_count"], r["sale_count"],
-                        r["first_date"]) for r in list_games(db, {})])
+        return to_csv(["ID", "Titre", "Titre original", "Romaji", "Série", "Éditeur", "Année", "Genre",
+                       "Licence", "Remarques", "Nb pubs", "Nb apparitions", "Dont en vente", "1re parution"],
+                      [(r["id"], r["title"], r["original_title"], r["romaji"], r["series_name"], r["publisher"],
+                        r["year"], r["genre"], r["licence"], r["notes"], r["ads_count"], r["app_count"],
+                        r["sale_count"], r["first_date"]) for r in list_games(db, {})])
     if name == "magazines":
-        return to_csv(["ID", "Magazine", "Éditeur", "Périodicité", "Remarques", "Nb numéros",
-                       "Nb apparitions", "Dont en vente"],
-                      [(r["id"], r["name"], r["publisher"], r["frequency"], r["notes"], r["issues_count"],
-                        r["app_count"], r["sale_count"]) for r in list_magazines(db, {})])
+        return to_csv(["ID", "Magazine", "Éditeur", "Périodicité", "Plateforme", "Première année",
+                       "Dernière année", "Nombre de numéros parus", "Remarques", "Nb numéros",
+                       "Numéros possédés", "Numéros manquants", "Nb apparitions", "Dont en vente",
+                       "Pages de pub", "Pages de pub par numéro"],
+                      [(r["id"], r["name"], r["publisher"], r["frequency"], r["platform_name"], r["start_year"],
+                        r["end_year"], r["total_issues"], r["notes"], r["issues_count"], r["owned_count"],
+                        r["missing"], r["app_count"], r["sale_count"], fmt_num(r["ad_pages"]),
+                        fmt_num(r["avg_ad_pages"])) for r in list_magazines(db, {})])
     if name == "numeros":
-        return to_csv(["ID", "Magazine", "Numéro", "Date", "Remarques", "Nb pubs", "Dont en vente"],
-                      [(r["id"], r["magazine_name"], r["number"], r["date"], r["notes"], r["app_count"],
-                        r["sale_count"]) for r in list_issues(db, {})])
+        return to_csv(["ID", "Magazine", "Numéro", "Date", "Possédé", "Nb pages", "Remarques", "Nb pubs",
+                       "Pages de pub", "Dont en vente"],
+                      [(r["id"], r["magazine_name"], r["number"], r["date_label"] or r["date"],
+                        "oui" if r["owned"] else "non", r["pages"], r["notes"], r["app_count"],
+                        fmt_num(r["ad_pages"]), r["sale_count"]) for r in list_issues(db, {})])
     if name == "series":
         return to_csv(["ID", "Série", "Remarques", "Nb jeux", "Nb pubs", "Nb apparitions"],
                       [(r["id"], r["name"], r["notes"], r["games_count"], r["ads_count"], r["app_count"])
@@ -1543,12 +1781,12 @@ def load_demo():
             mid[n] = db.execute("INSERT INTO magazines(name, publisher, frequency, notes) VALUES (?,?,?,?)",
                                 (n, pub, fr, "DÉMO")).lastrowid
         gid = {}
-        for t, o, s, p, y in (("Final Fantasy VII", "ファイナルファンタジーVII", "Final Fantasy", "Square", 1997),
-                              ("Biohazard 2", "バイオハザード2", "Biohazard", "Capcom", 1998),
-                              ("Sakura Taisen", "サクラ大戦", "Sakura Taisen", "Sega", 1996),
-                              ("Dragon Quest VII", "ドラゴンクエストVII エデンの戦士たち", "Dragon Quest", "Enix", 2000)):
-            gid[t] = db.execute("INSERT INTO games(title, original_title, series_id, publisher, year, notes) "
-                                "VALUES (?,?,?,?,?,?)", (t, o, sid[s], p, y, "DÉMO")).lastrowid
+        for t, o, s, p, y, ge in (("Final Fantasy VII", "ファイナルファンタジーVII", "Final Fantasy", "Square", 1997, "RPG"),
+                                  ("Biohazard 2", "バイオハザード2", "Biohazard", "Capcom", 1998, "Survival horror"),
+                                  ("Sakura Taisen", "サクラ大戦", "Sakura Taisen", "Sega", 1996, "Aventure"),
+                                  ("Dragon Quest VII", "ドラゴンクエストVII エデンの戦士たち", "Dragon Quest", "Enix", 2000, "RPG")):
+            gid[t] = db.execute("INSERT INTO games(title, original_title, series_id, publisher, year, genre, notes) "
+                                "VALUES (?,?,?,?,?,?,?)", (t, o, sid[s], p, y, ge, "DÉMO")).lastrowid
         aid = []
         for g, p, d, n in (("Final Fantasy VII", "PlayStation", "Cloud devant Midgar", 2),
                            ("Final Fantasy VII", "PlayStation", "Aerith, fond fleurs", 1),
@@ -1568,7 +1806,7 @@ def load_demo():
                 ("Weekly Famitsu", "421", "1997-01-03", "12", 0, 1),
                 ("Weekly Famitsu", "421", "1997-01-03", "40", 3, 0),
                 ("Weekly Famitsu", "425", "1997-01-31", "8", 0, 0),
-                ("Weekly Famitsu", "430", "1997-03-07", "2", 1, 1),
+                ("Weekly Famitsu", "430", "7 et 14 mars 1997", "2", 1, 1),
                 ("Dengeki PlayStation", "38", "1997-01-10", "2", 0, 1),
                 ("Dengeki PlayStation", "38", "1997-01-10", "100", 2, 0),
                 ("Sega Saturn Magazine", "5", "1996-09", "表4", 3, 1),
@@ -1576,6 +1814,9 @@ def load_demo():
             iid = ensure_issue(db, mid[m], num, date)
             db.execute("INSERT INTO appearances(ad_id, issue_id, page, for_sale, notes) VALUES (?,?,?,?,?)",
                        (aid[ad], iid, page, sale, "DÉMO"))
+        # Catalogue : un magazine dont on connaît le nombre de numéros (fictif)
+        db.execute("UPDATE magazines SET total_issues = 12, start_year = 1996 WHERE id = ?", (mid["Sega Saturn Magazine"],))
+        generate_issues(db, mid["Sega Saturn Magazine"], 1, 12)
     print("Données de démonstration chargées.")
 
 
@@ -1847,7 +2088,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(NETWORK.status())
         if method == "GET" and head == "meta":
             return self.send_json({"platforms": list_platforms(db, {}), "series": list_series(db, {}),
-                                   "magazines": list_magazines(db, {})})
+                                   "magazines": list_magazines(db, {}), **filter_values(db)})
+        if method == "GET" and head == "stats":
+            return self.send_json(stats(db, qs))
+        if head == "magazines" and rid and len(parts) == 3 and parts[2] == "generer" and method == "POST":
+            body = self.read_json()
+            with db:
+                n = generate_issues(db, rid, body.get("de", 1), body.get("a"))
+            return self.send_json({"crees": n, "magazine": detail(db, "magazines", rid)})
         if method == "GET" and head == "dashboard":
             return self.send_json(dashboard(db))
         if method == "GET" and head == "search":

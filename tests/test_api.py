@@ -89,6 +89,100 @@ check(sorted(ad["platform_ids"]) == sorted([plat["PlayStation"], plat["Sega Satu
 check(get(f"/api/search?platform_id={plat['Sega Saturn']}")["stats"]["total"] == 2 + 2,
       "recherche Saturn inclut la pub multi-plateformes")
 
+section("Dates de parution en texte libre")
+sys.path.insert(0, os.path.join(ROOT, "appli"))
+import app as APP  # noqa: E402  (fonctions pures seulement : l'analyseur de dates)
+FORMES = {
+    "1997-04-08": ("1997-04-08", ""), "1997": ("1997", ""),
+    "8 et 15 avril 1997": ("1997-04-08", "8 et 15 avril 1997"),
+    "juillet-août 1996": ("1996-07", "juillet-août 1996"),
+    "Juillet/Août 1996": ("1996-07", "Juillet/Août 1996"),
+    "31 décembre 1996 - 7 janvier 1997": ("1996-12-31", None),
+    "décembre 1996 / janvier 1997": ("1996-12", None),
+    "08/04/1997": ("1997-04-08", None), "4/1997": ("1997-04", None), "1997/04/08": ("1997-04-08", None),
+    "1997年4月8・15日号": ("1997-04-08", None), "1996年7・8月合併号": ("1996-07", None),
+    "1997年4月号": ("1997-04", None), "１９９７年４月": ("1997-04", None),
+    "1er mai 1998": ("1998-05-01", None), "avril 97": ("1997-04", None),
+    "April 8-15, 1997": ("1997-04-08", None), "hiver 1996": ("1996", None),
+    "n° spécial été 1998": ("1998", None), "  8  et 15 avril 1997 ": ("1997-04-08", "8 et 15 avril 1997"),
+}
+for txt, (iso, label) in FORMES.items():
+    got = APP.parse_issue_date(txt)
+    check(got[0] == iso and (label is None or got[1] == label), f"« {txt} » → {iso} (obtenu {got})")
+for txt in ("12 avril", "bientôt", "97/01"):
+    try:
+        APP.parse_issue_date(txt)
+        check(False, f"« {txt} » refusé (pas d'année)")
+    except ValueError:
+        check(True, f"« {txt} » refusé (pas d'année)")
+s, iss = call("POST", "/api/issues", {"magazine_id": mags["Weekly Famitsu"], "number": "431", "date": "8 et 15 avril 1997"})
+check(s == 201 and iss["date"] == "1997-04-08" and iss["date_label"] == "8 et 15 avril 1997",
+      "numéro enregistré avec le texte de la date et une date triable")
+s, iss = call("PUT", f"/api/issues/{iss['id']}", {"date": "1997-04-08"})
+check(iss["date_label"] == "", "date ISO : plus de libellé")
+with urllib.request.urlopen(BASE + "/api/export/apparitions.csv") as r_:
+    check("7 et 14 mars 1997" in r_.read().decode("utf-8"), "export CSV : date telle qu'écrite")
+
+section("Statistiques et compteur de pages")
+st = get("/api/stats?par=genre")
+g = {x["label"]: x for x in st["groups"]}
+check(g["RPG"]["n"] == 5 and g["RPG"]["games"] == 2, f"par type de jeu : RPG = 5 parutions, 2 jeux ({g.get('RPG')})")
+check(st["total"]["total"] == 9 and st["total"]["pages"] == sum(x["pages"] for x in st["groups"]), "totaux cohérents")
+st = get(f"/api/stats?par=editeur&magazine_id={mags['Weekly Famitsu']}")
+check({x["label"]: x["n"] for x in st["groups"]} == {"Square": 3, "Sega": 1, "Enix": 1}, "par éditeur, filtré sur un magazine")
+st = get("/api/stats?par=annee")
+check([x["key"] for x in st["groups"]] == ["1996", "1997", "1998", ""], f"par année de parution, triée ({[x['key'] for x in st['groups']]})")
+check(get("/api/stats?par=plateforme")["groups"][0]["label"] == "PlayStation", "par plateforme")
+s, _ = call("GET", "/api/stats?par=nimporte")
+check(s == 400, "regroupement inconnu refusé")
+m = get(f"/api/magazines/{mags['Weekly Famitsu']}")
+check(m["ad_pages"] == 2 + 1 + 2 + 1 + 2 and m["avg_ad_pages"] == round(8 / 4, 1),
+      f"pages de pub du magazine et moyenne par numéro ({m['ad_pages']}, {m['avg_ad_pages']})")
+i421 = [i for i in m["issues"] if i["number"] == "421"][0]
+check(i421["ad_pages"] == 3, "pages de pub d'un numéro")
+check(get(f"/api/search?genre=RPG&publisher=Square")["stats"]["total"] == 4, "recherche par type de jeu + éditeur")
+meta = get("/api/meta")
+check("RPG" in meta["genres"] and "Square" in meta["publishers"], "valeurs proposées (genres, éditeurs)")
+
+section("Catalogue des magazines (possédés / manquants)")
+ssm = get(f"/api/magazines/{mags['Sega Saturn Magazine']}")
+check((ssm["expected"], ssm["owned_count"], ssm["missing"]) == (12, 1, 11), "démo : 1 numéro possédé sur 12, il en manque 11")
+s, r = call("POST", f"/api/magazines/{mags['Sega Saturn Magazine']}/generer", {"de": 1, "a": 14})
+check(s == 200 and r["crees"] == 2 and r["magazine"]["missing"] == 13, "générer 1 à 14 : seuls les 2 numéros absents sont créés")
+s, _ = call("POST", f"/api/magazines/{mags['Sega Saturn Magazine']}/generer", {"de": 10, "a": 2})
+check(s == 400, "plage de numéros à l'envers refusée")
+n7 = [i for i in r["magazine"]["issues"] if i["number"] == "7"][0]
+s, _ = call("PUT", f"/api/issues/{n7['id']}", {"owned": 1})
+check(get(f"/api/magazines/{mags['Sega Saturn Magazine']}")["owned_count"] == 2, "un numéro marqué possédé")
+call("POST", "/api/appearances", {"magazine_id": mags["Sega Saturn Magazine"], "issue_number": "8", "ad_id": 4})
+ssm = get(f"/api/magazines/{mags['Sega Saturn Magazine']}")
+check(ssm["owned_count"] == 3, "saisir une pub dans un numéro manquant le marque possédé")
+check(counts()["issues"] == 10, f"accueil : seuls les numéros possédés sont comptés ({counts()['issues']})")
+s, mg = call("PUT", f"/api/magazines/{mags['Sega Saturn Magazine']}", {"total_issues": 20, "platform_id": plat["Sega Saturn"]})
+check(mg["expected"] == 20 and mg["platform_name"] == "Sega Saturn", "nombre de numéros parus + console du magazine")
+
+section("Mise à jour d'une base d'une version précédente (sans perte)")
+import sqlite3  # noqa: E402
+vieille = os.path.join(TMP, "vieille_base.sqlite")
+db = sqlite3.connect(vieille)
+db.executescript(APP.SCHEMA_V1 + APP.SCHEMA_V2 + "PRAGMA user_version = 2;")
+db.execute("INSERT INTO magazines(name) VALUES ('Famitsu')")
+db.execute("INSERT INTO issues(magazine_id, number, date) VALUES (1, '1', '1997-01')")
+db.execute("INSERT INTO games(title) VALUES ('Jeu')")
+db.commit()
+db.close()
+class _P:  # projet minimal pour init_db
+    id = "test"; dir = os.path.join(TMP, "vieux_projet"); db_path = vieille
+    img_dir = os.path.join(dir, "images"); thumb_dir = os.path.join(dir, "miniatures"); backup_dir = os.path.join(dir, "sauv")
+APP.init_db(_P)
+db = sqlite3.connect(vieille)
+check(db.execute("PRAGMA user_version").fetchone()[0] == len(APP.MIGRATIONS), "base mise à jour au dernier schéma")
+check(db.execute("SELECT number, date, date_label, owned FROM issues").fetchone() == ("1", "1997-01", "", 1),
+      "numéros existants conservés et marqués possédés")
+check(db.execute("SELECT title, genre FROM games").fetchone() == ("Jeu", ""), "jeux existants conservés")
+check(len(os.listdir(_P.backup_dir)) == 1, "copie de la base faite avant la mise à jour")
+db.close()
+
 section("Images")
 png = open(os.path.join(TMP, "image_bleue.png"), "rb").read()
 s, im = call("POST", "/api/images", {"entity": "ads", "entity_id": 2, "name": "scan.png",

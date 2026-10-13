@@ -397,6 +397,38 @@ code { overflow-wrap: anywhere; }
 header.top .version { margin-left: auto; font-size: 11px; color: var(--muted); }
 header.top .version + .quit { margin-left: 8px; }
 
+/* ---------- Complétude, catalogue, statistiques ---------- */
+.small { font-size: 12px; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.progress { display: inline-block; vertical-align: middle; width: 120px; height: 10px; border-radius: 5px;
+  background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--ok); }
+.complete-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.complete-head .progress { width: 200px; }
+.year-bars { display: flex; align-items: flex-end; gap: 4px; height: 110px; margin-top: 12px; overflow-x: auto; padding-bottom: 2px; }
+.yb { flex: 1 0 22px; max-width: 46px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; }
+.yb-col { background: var(--line); border-radius: 3px 3px 0 0; display: flex; align-items: flex-end; min-height: 2px; }
+.yb-own { width: 100%; background: var(--ok); border-radius: 3px 3px 0 0; }
+.yb-l { font-size: 10px; color: var(--muted); text-align: center; margin-top: 2px; }
+.legend { margin-top: 4px; display: flex; align-items: center; gap: 4px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 6px; }
+.sw.own { background: var(--ok); } .sw.known { background: var(--line); }
+.gen-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gen-row input { width: 90px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; background: transparent; }
+.seg button.on { background: var(--accent); color: var(--accent-text); }
+.num-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; }
+.num-chip { padding: 6px 4px; font-variant-numeric: tabular-nums; border: 1px dashed var(--line); background: var(--panel); color: var(--muted); }
+.num-chip.own { border: 1px solid var(--ok); background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.missing-list { margin-top: 12px; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; overflow-wrap: anywhere; }
+.missing-list button { margin-left: 6px; padding: 2px 8px; }
+tr.missing td { color: var(--muted); }
+table.stats .bar-col { width: 34%; min-width: 140px; white-space: nowrap; }
+.hbar { display: inline-block; vertical-align: middle; height: 12px; background: var(--accent); border-radius: 0 3px 3px 0; max-width: calc(100% - 44px); }
+.hbar-v { margin-left: 6px; font-variant-numeric: tabular-nums; font-size: 12px; }
+label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+
 /* ---------- Écrans de portable (14 pouces : ~1280×720 à 1366×768 utiles) ----------
    Tout est resserré pour que la saisie tienne sans faire défiler. */
 @media (max-width: 1500px), (max-height: 850px) {
@@ -437,3 +469,8 @@ header.top .version + .quit { margin-left: 8px; }
   .ad-preview { padding: 6px 8px; margin-top: 2px; }
   .ad-preview > img, .ad-preview > .thumb-none { display: none; }
 }
+@media (max-width: 600px) {
+  header.top .version { display: none; }
+  .complete-head .progress { width: 120px; }
+}
+.statbar .progress { width: 90px; }

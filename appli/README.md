@@ -63,8 +63,10 @@ ouverte pendant que l'application était arrêtée, elle se reconnecte toute seu
 | **Recherche** | Recherche croisée : magazine, numéro, année, jeu, série, plateforme, n° de pub, en vente, mot-clé. Statistiques + export CSV du résultat. |
 | **Pubs** | Galerie de toutes les pubs (un visuel = une pub, avec un n° unique, une ou **plusieurs plateformes** cochées). Fiche : images, et **tous les magazines où on la trouve**. |
 | **Jeux** | Liste triable (nb de pubs, de parutions, 1re parution). Fiche : toutes ses pubs et toutes ses parutions. |
-| **Magazines** | Magazines > numéros > **les publicités de chaque numéro**, avec la couverture. |
-| **Séries & plateformes** | Les listes de référence (plateformes japonaises déjà remplies). |
+| **Magazines** | Magazines > numéros > **les publicités de chaque numéro**, avec la couverture. Pages de pub au total et **en moyenne par numéro**, complétude de la collection. |
+| **Catalogue** | **Tous les magazines parus, même ceux que vous n'avez pas** : nombre de numéros parus, numéros possédés / manquants, « il me manque N numéros » (liste copiable). |
+| **Statistiques** | Chiffres regroupés par magazine, plateforme, éditeur, type de jeu, licence, série, année… avec filtres combinables et barres. |
+| **Listes** | Séries et plateformes (plateformes japonaises déjà remplies). |
 | **Export** | CSV pour Excel (toutes les tables) et **sauvegarde complète en ZIP** (base + images). |
 
 ### Images
@@ -103,6 +105,31 @@ tient à l'écran et le bouton « Enregistrer » reste toujours visible en bas.
    pour la pub suivante.
 
 Au clavier : lettres du jeu → `Entrée` → `Tab` jusqu'à la miniature → `Entrée` → page → `Entrée`.
+
+### Dates de parution
+
+Le champ « Date de parution » accepte la date **telle qu'elle est écrite sur le magazine** :
+`8 et 15 avril 1997`, `juillet-août 1996`, `1997年4月8・15日号`, `08/04/1997`, `1997-04-08`…
+Le texte est affiché tel quel ; l'application en déduit le premier jour (ou mois) pour trier et
+pour les statistiques par année. Seule obligation : l'année doit y figurer.
+
+### Catalogue : savoir ce qui manque
+
+1. Page **Catalogue** > « ＋ Ajouter un magazine » (ou un magazine existant) > **✎ Modifier** :
+   indiquer le **nombre de numéros parus** (et, si on veut, les années et la console du magazine).
+2. « **Générer** » les numéros de 1 à N : ils sont créés comme **manquants**.
+3. Toucher un numéro pour le marquer **possédé ✓** (ou manquant). Saisir une pub dans un numéro le
+   marque possédé automatiquement.
+4. La jauge montre la complétude, avec des barres par année ; en bas, « **Il me manque** : 1-4,
+   6-12 » (bouton « Copier » pour l'envoyer à un vendeur).
+
+Les magazines ne sont pas pré-remplis : c'est à vous de compléter le catalogue au fil de l'eau.
+
+### Jeux : type, licence
+
+Fiche d'un jeu : **type de jeu** (RPG, action…) et **licence** (Dragon Ball, Gundam… : différente
+de la série de jeux). Les valeurs déjà utilisées sont proposées en tapant. Elles servent de filtres
+dans la Recherche, la liste des Jeux et les Statistiques.
 
 ## Projets
 

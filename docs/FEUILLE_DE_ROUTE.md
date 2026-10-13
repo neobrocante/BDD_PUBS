@@ -6,7 +6,7 @@
 > puis cocher la case ici. Poser les « questions ouvertes » au propriétaire **avant** de coder les
 > points concernés (il répond en français, à l'oral, souvent sur téléphone : questions courtes).
 
-État au 13/10/2026 : version `2026.10.13.1`, tous les tests passent, release publiée.
+État au 13/10/2026 : version `2026.10.13.2`, tous les tests passent, release publiée.
 
 ## Demandes du testeur (reçues le 13/10/2026)
 
@@ -71,7 +71,7 @@ affichée (doit être ≥ 2026.09.30).
 
 ### Lot 2 : dates de magazines plus riches
 
-- [ ] **Dates du type « 8 et 15 avril 1997 », « juillet-août 1996 ».** Garder `issues.date`
+- [x] **Dates du type « 8 et 15 avril 1997 », « juillet-août 1996 ».** Garder `issues.date`
   (AAAA, AAAA-MM ou AAAA-MM-JJ : sert au tri, au filtre par année, aux statistiques) et ajouter
   une colonne `issues.date_label` (texte libre, affiché tel quel). Dans les formulaires, **un seul
   champ « Date de parution » en texte libre** : le serveur en déduit `date` (premier jour reconnu)
@@ -81,6 +81,15 @@ affichée (doit être ≥ 2026.09.30).
   Migration `SCHEMA_V3` (voir le lot 3 pour regrouper les colonnes ajoutées).
 
 ### Lot 3 : statistiques, pages, complétude, catalogue de magazines
+
+Fait le 13/10 avec le lot 2 (`2026.10.13.2`, migration `SCHEMA_V3` qui ajoute aussi `games.romaji`
+et `games.wikidata` pour le lot 5). Tests : `tests/test_api.py` (analyseur de dates sur ~20 formes,
+statistiques, catalogue, mise à jour d'une base V2) et `tests/ui/catalogue_stats.js`.
+Réalisé : page **Statistiques** (`/api/stats?par=…` + filtres de `search_where`), page
+**Catalogue** (`#/catalogue`, `/api/magazines/<id>/generer`), pages de pub et moyenne par numéro
+(fiches magazine/numéro, liste des magazines), jauge + barres par année (CSS, sans bibliothèque :
+la compétence `dataviz` n'était pas disponible dans la session). L'accueil ne compte que les
+numéros possédés. Le menu « Séries & plateformes » s'appelle maintenant « Listes ».
 
 Ces points partagent les mêmes ajouts au modèle de données : les concevoir ensemble, **une seule
 migration** (`SCHEMA_V3`, avec `date_label` du lot 2 si pas encore fait).
@@ -95,18 +104,18 @@ Ajouts proposés :
   éventuellement `platform` (magazine dédié à une console).
 
 Points de la liste :
-- [ ] **Compteur de pages** : total des pages de pub (somme de `ads.pages` sur les parutions),
+- [x] **Compteur de pages** : total des pages de pub (somme de `ads.pages` sur les parutions),
   moyenne de pages de pub par numéro et par magazine, part de la pagination si `issues.pages` est
   renseigné. Affichage : fiche magazine, fiche numéro, page Statistiques.
-- [ ] **Statistiques avec filtres** : nouvelle page « Statistiques » (menu) avec filtres combinables
+- [x] **Statistiques avec filtres** : nouvelle page « Statistiques » (menu) avec filtres combinables
   (éditeur, genre, année de sortie du jeu / année de parution, licence, série, plateforme,
   magazine, en vente) et regroupements (par éditeur, par plateforme, par année, par magazine…) :
   nombre de pubs, de parutions, de pages. Réutiliser le moteur de `search()` pour les filtres.
-- [ ] **Graphiques de complétude** : par magazine, numéros possédés / numéros parus
+- [x] **Graphiques de complétude** : par magazine, numéros possédés / numéros parus
   (`total_issues` ou numéros du catalogue), par année ; jauges et barres. Charger d'abord la
   compétence `dataviz` avant d'écrire les graphiques. **Sans bibliothèque externe** (SVG fait
   main dans `app.js`), lisibles en thème clair et sombre.
-- [ ] **Onglet « Liste de magazines » (catalogue)** : tous les magazines qui ont existé, même non
+- [x] **Onglet « Liste de magazines » (catalogue)** : tous les magazines qui ont existé, même non
   possédés ; pour chacun, la liste des numéros connus avec leur état possédé / manquant, et
   « il me manque N numéros ». Outil « Générer les numéros 1 à N » (crée des numéros `owned=0`),
   bascule possédé/manquant d'un clic. La saisie rapide marque un numéro « possédé » quand on y
@@ -163,3 +172,4 @@ Points de la liste :
   automatique quotidienne (incrémentale pour les photos), restauration en un clic.
 - 13/10 : `CLAUDE.md`, cette feuille de route, tests automatiques dans `tests/`.
 - 13/10 : lot 1 (ergonomie, écran de portable, retour, modifier la pub sur place, version affichée).
+- 13/10 : lots 2 et 3 (dates libres, statistiques, compteur de pages, catalogue et complétude).

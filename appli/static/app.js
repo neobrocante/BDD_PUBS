@@ -32,6 +32,11 @@ function qs(obj) {
 
 const fmtPages = n => n == null || n === '' ? '' : String(n).replace('.', ',');
 const plural = (n, s, p) => `${n} ${n > 1 ? (p || s + 's') : s}`;
+// Date d'un numéro : le texte saisi (« 8 et 15 avril 1997 ») sinon la date AAAA-MM-JJ
+const fmtDate = r => (r && (r.date_label || r.date)) || '';
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+// Barre de progression (complétude) : possédés / attendus
+const progress = (a, b, title = '') => `<span class="progress" title="${esc(title || `${a} / ${b}`)}"><span style="width:${Math.min(100, pct(a, b))}%"></span></span>`;
 const imgSrc = im => im.thumb_url || im.url;
 const thumbImg = (url, cls = 'thumb-img') => url
   ? `<img class="${cls}" loading="lazy" src="${esc(url)}" alt="">`
@@ -527,6 +532,13 @@ function formModal({ title, fields, values = {}, submitLabel = 'Enregistrer', on
         i.placeholder = f.placeholder || '';
         i.value = values[f.name] ?? '';
         row.append(i);
+        if (f.suggest) { // valeurs déjà utilisées, proposées en tapant
+          const dl = el('datalist');
+          dl.id = 'dl-' + f.name + '-' + Math.random().toString(36).slice(2, 7);
+          i.setAttribute('list', dl.id);
+          row.append(dl);
+          getMeta().then(meta => { dl.innerHTML = (meta[f.suggest] || []).map(v => `<option value="${esc(v)}">`).join(''); });
+        }
         ctrls[f.name] = { get: () => i.value.trim(), focus: () => i.focus() };
       }
       if (f.help) row.append(el('small', null, esc(f.help)));
@@ -635,8 +647,11 @@ async function openGameForm(values = {}) {
       { name: 'title', label: 'Titre', required: true, wide: true, placeholder: 'Final Fantasy VII' },
       { name: 'original_title', label: 'Titre original', wide: true, placeholder: 'ファイナルファンタジーVII' },
       { name: 'series_id', label: 'Série', type: 'combo', combo: v => seriesCombo({ value: v }) },
-      { name: 'publisher', label: 'Éditeur', placeholder: 'Square' },
+      { name: 'publisher', label: 'Éditeur', placeholder: 'Square', suggest: 'publishers' },
       { name: 'year', label: 'Année de sortie', type: 'number', placeholder: '1997' },
+      { name: 'genre', label: 'Type de jeu', placeholder: 'RPG, action, course…', suggest: 'genres' },
+      { name: 'licence', label: 'Licence', placeholder: 'Dragon Ball, Gundam, Disney…', suggest: 'licences',
+        help: 'Licence au sens large (manga, film…), différente de la série de jeux.' },
       { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
     ],
     onSubmit: async data => {
@@ -706,11 +721,17 @@ async function openMagazineForm(values = {}) {
   const isNew = !values.id;
   return formModal({
     title: isNew ? 'Nouveau magazine' : 'Modifier le magazine',
-    values,
+    values: { ...values, platform_id: values.platform_id ? String(values.platform_id) : '' },
     fields: [
       { name: 'name', label: 'Nom', required: true, wide: true, placeholder: 'Weekly Famitsu' },
       { name: 'publisher', label: 'Éditeur', placeholder: 'ASCII / Enterbrain' },
       { name: 'frequency', label: 'Périodicité', placeholder: 'Hebdomadaire, mensuel…' },
+      { name: 'start_year', label: 'Première année', type: 'number', placeholder: '1986' },
+      { name: 'end_year', label: 'Dernière année', type: 'number', placeholder: 'vide si toujours publié' },
+      { name: 'total_issues', label: 'Nombre de numéros parus', type: 'number', placeholder: 'si connu',
+        help: 'Sert à calculer la complétude (« il me manque N numéros »).' },
+      { name: 'platform_id', label: 'Magazine dédié à', type: 'select', options: [{ value: '', label: '— toutes consoles —' },
+        ...(await getMeta()).platforms.map(p => ({ value: String(p.id), label: p.name }))] },
       { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
     ],
     onSubmit: async data => {
@@ -721,15 +742,19 @@ async function openMagazineForm(values = {}) {
   });
 }
 
+const DATE_HELP = 'Comme écrit sur le magazine : « 8 et 15 avril 1997 », « juillet-août 1996 », 1997年4月8日号, 08/04/1997…';
+
 async function openIssueForm(values = {}) {
   const isNew = !values.id;
   return formModal({
     title: isNew ? 'Nouveau numéro' : 'Modifier le numéro',
-    values,
+    values: { ...values, date: fmtDate(values), owned: values.owned === 0 ? '0' : '1' },
     fields: [
       { name: 'magazine_id', label: 'Magazine', type: 'combo', required: true, wide: true, combo: v => magazineCombo({ value: v }) },
       { name: 'number', label: 'Numéro', required: true, placeholder: '425' },
-      { name: 'date', label: 'Date de parution', placeholder: 'AAAA-MM-JJ (ou AAAA-MM)' },
+      { name: 'date', label: 'Date de parution', placeholder: '1997-04-08, 8 et 15 avril 1997…', help: DATE_HELP },
+      { name: 'pages', label: 'Nombre de pages du numéro', type: 'number', placeholder: 'facultatif' },
+      { name: 'owned', label: 'Je l\'ai ?', type: 'select', options: [{ value: '1', label: '✓ Possédé' }, { value: '0', label: 'Manquant (catalogue)' }] },
       { name: 'notes', label: 'Remarques', type: 'textarea', wide: true },
     ],
     onSubmit: async data => {
@@ -799,7 +824,7 @@ function appTable(items, { hide = [], onChange = () => {}, emptyText = 'Aucune p
     <tbody>${items.map((r, i) => `<tr data-i="${i}">
       <td class="thumb">${thumbImg(r.thumb_url)}</td>
       ${show('issue') ? `<td><a href="#/numeros/${r.issue_id}">${esc(r.magazine)} <b>n°${esc(r.number)}</b></a></td>
-        <td class="nowrap">${esc(r.date || '—')}</td>` : ''}
+        <td class="nowrap">${esc(fmtDate(r) || '—')}</td>` : ''}
       <td class="nowrap">${esc(r.page)}</td>
       ${show('game') ? `<td><a href="#/jeux/${r.game_id}">${esc(r.game)}</a></td>` : ''}
       ${show('ad') ? `<td><a href="#/pubs/${r.ad_id}">#${r.ad_id}</a> <span class="muted">${esc(r.description || '')}</span></td>` : ''}
@@ -939,7 +964,7 @@ async function pageEntry(view, params) {
         <div class="form issue-row">
           <div class="field mag"><span>Magazine <b class="req">*</b></span><div id="f-mag"></div></div>
           <label class="field"><span>Numéro <b class="req">*</b></span><input id="f-num" placeholder="425"></label>
-          <label class="field"><span>Date de parution</span><input id="f-date" placeholder="AAAA-MM-JJ"></label>
+          <label class="field"><span>Date de parution</span><input id="f-date" placeholder="1997-04-08, 8 et 15 avril…" title="${esc(DATE_HELP)}"></label>
         </div>
         <div class="issue-status" id="issue-status"></div>
         <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
@@ -1095,8 +1120,8 @@ async function pageEntry(view, params) {
     if (found.length) {
       issue = await GET(`issues/${found[0].id}`);
       if (id !== reqId) return;
-      if (!dateI.value && issue.date) dateI.value = issue.date;
-      status.innerHTML = `<span class="badge gray">numéro existant</span> ${issue.date ? 'paru le ' + esc(issue.date) + ' · ' : ''}${plural(issue.app_count, 'pub référencée', 'pubs référencées')}`;
+      if (!dateI.value && issue.date) dateI.value = fmtDate(issue);
+      status.innerHTML = `<span class="badge gray">numéro existant</span> ${issue.date ? 'paru le ' + esc(fmtDate(issue)) + ' · ' : ''}${plural(issue.app_count, 'pub référencée', 'pubs référencées')}${issue.owned ? '' : ' · <b>noté manquant : il passera « possédé »</b>'}`;
       lastItems = issue.appearances;
       $('#in-issue-links', view).innerHTML = `<a class="btn" href="#/numeros/${issue.id}">Fiche du numéro</a>`;
       const inIssue = $('#in-issue', view);
@@ -1175,6 +1200,9 @@ async function pageEntry(view, params) {
 }
 
 // ---------------------------------------------------------------------------
+// Options d'une liste déroulante à partir de valeurs texte (éditeurs, genres…)
+const optVals = (list, all = 'Tous') => `<option value="">${all}</option>` + (list || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+
 async function pageSearch(view, params) {
   const meta = await getMeta();
   const opt = (list, lbl = x => x.name) => '<option value="">Tous</option>' + list.map(x => `<option value="${x.id}">${esc(lbl(x))}</option>`).join('');
@@ -1188,6 +1216,10 @@ async function pageSearch(view, params) {
       <label class="field"><span>Jeu (contient)</span><input name="jeu" placeholder="final fantasy"></label>
       <label class="field"><span>Série</span><select name="series_id">${opt(meta.series)}</select></label>
       <label class="field"><span>Plateforme</span><select name="platform_id">${opt(meta.platforms)}</select></label>
+      <label class="field"><span>Éditeur du jeu</span><select name="publisher">${optVals(meta.publishers)}</select></label>
+      <label class="field"><span>Type de jeu</span><select name="genre">${optVals(meta.genres)}</select></label>
+      <label class="field"><span>Licence</span><select name="licence">${optVals(meta.licences)}</select></label>
+      <label class="field"><span>Année de sortie du jeu</span><select name="annee_jeu">${optVals(meta.game_years.map(String), 'Toutes')}</select></label>
       <label class="field"><span>N° de pub</span><input name="ad_id" placeholder="12"></label>
       <label class="field"><span>En vente</span><select name="vente"><option value="">Tous</option><option value="1">${MARU} Oui</option><option value="0">${BATSU} Non</option></select></label>
       <label class="field"><span>Mot-clé (description, remarques)</span><input name="q"></label>
@@ -1319,6 +1351,8 @@ async function pageGames(view, params) {
     <div class="toolbar" id="tb">
       <input type="search" name="q" placeholder="Titre, titre original, éditeur…">
       <select name="series_id"><option value="">Toutes séries</option>${meta.series.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+      ${meta.genres.length ? `<select name="genre">${optVals(meta.genres, 'Tous types')}</select>` : ''}
+      ${meta.licences.length ? `<select name="licence">${optVals(meta.licences, 'Toutes licences')}</select>` : ''}
       <span class="muted" id="count"></span>
     </div>
     <div class="card"><div class="table-wrap" id="list"></div></div>`;
@@ -1326,7 +1360,7 @@ async function pageGames(view, params) {
   for (const [k, v] of Object.entries(params)) { const e = tb.querySelector(`[name="${k}"]`); if (e) e.value = v; }
   let sortKey = 'title', sortDir = 1, list = [];
   function draw() {
-    const cols = [['title', 'Titre'], ['series_name', 'Série'], ['platforms', 'Plateformes'], ['publisher', 'Éditeur'], ['year', 'Année', 'num'],
+    const cols = [['title', 'Titre'], ['series_name', 'Série'], ['platforms', 'Plateformes'], ['publisher', 'Éditeur'], ['genre', 'Type'], ['year', 'Année', 'num'],
       ['ads_count', 'Pubs', 'num'], ['app_count', 'Parutions', 'num'], ['sale_count', 'En vente', 'num'], ['first_date', '1re parution']];
     const sorted = [...list].sort((a, b) => {
       const x = a[sortKey] ?? '', y = b[sortKey] ?? '';
@@ -1335,8 +1369,8 @@ async function pageGames(view, params) {
     $('#list', view).innerHTML = list.length ? `<table class="data"><thead><tr><th></th>${cols.map(([k, l, c]) =>
       `<th class="${c || ''}" data-k="${k}" style="cursor:pointer">${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
       <tbody>${sorted.map(g => `<tr class="clickable" data-id="${g.id}"><td class="thumb">${thumbImg(g.thumb_url)}</td>
-        <td><b>${esc(g.title)}</b><div class="muted">${esc(g.original_title)}</div></td><td>${esc(g.series_name || '')}</td>
-        <td class="muted">${esc(g.platforms || '')}</td><td>${esc(g.publisher)}</td><td class="num">${g.year ?? ''}</td><td class="num">${g.ads_count}</td>
+        <td><b>${esc(g.title)}</b><div class="muted">${esc([g.original_title, g.romaji].filter(Boolean).join(' · '))}</div></td><td>${esc(g.series_name || '')}</td>
+        <td class="muted">${esc(g.platforms || '')}</td><td>${esc(g.publisher)}</td><td>${esc(g.genre)}${g.licence ? `<div class="muted">${esc(g.licence)}</div>` : ''}</td><td class="num">${g.year ?? ''}</td><td class="num">${g.ads_count}</td>
         <td class="num">${g.app_count}</td><td class="num">${g.sale_count}</td><td>${esc(g.first_date || '')}</td></tr>`).join('')}</tbody></table>`
       : '<p class="empty">Aucun jeu.</p>';
   }
@@ -1347,7 +1381,8 @@ async function pageGames(view, params) {
     if (tr) location.hash = `#/jeux/${tr.dataset.id}`;
   });
   async function load() {
-    const f = { q: $('[name=q]', tb).value.trim(), series_id: $('[name=series_id]', tb).value };
+    const f = { q: $('[name=q]', tb).value.trim(), series_id: $('[name=series_id]', tb).value,
+      genre: $('[name=genre]', tb)?.value || '', licence: $('[name=licence]', tb)?.value || '' };
     history.replaceState(null, '', '#/jeux' + (qs(f) ? '?' + qs(f) : ''));
     list = await GET('games?' + qs(f));
     $('#count', view).textContent = plural(list.length, 'jeu', 'jeux');
@@ -1364,7 +1399,7 @@ async function pageGame(view, params, id) {
     const g = await GET(`games/${id}`);
     view.innerHTML = `
       <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/jeux">Jeux</a></div>
-        <h1>${esc(g.title)}</h1><div class="sub">${esc([g.original_title, g.series_name && 'série ' + g.series_name, g.publisher, g.year].filter(Boolean).join(' · '))}</div>
+        <h1>${esc(g.title)}</h1><div class="sub">${esc([g.original_title, g.romaji, g.series_name && 'série ' + g.series_name, g.publisher, g.year, g.genre, g.licence && 'licence ' + g.licence].filter(Boolean).join(' · '))}</div>
         ${g.platforms ? `<div class="sub">Plateformes (d'après ses pubs) : <b>${esc(g.platforms)}</b></div>` : ''}</div>
         <div class="btns"><button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
       <div class="tiles">
@@ -1397,41 +1432,70 @@ async function pageGame(view, params, id) {
 async function pageMagazines(view) {
   const list = await GET('magazines');
   view.innerHTML = `
-    <div class="page-head"><div><h1>Magazines</h1></div>
+    <div class="page-head"><div><h1>Magazines</h1><div class="sub">Les magazines et numéros que vous avez, avec leurs publicités.
+      Tous les numéros parus (même ceux qui manquent) : <a href="#/catalogue">Catalogue</a>.</div></div>
       <div class="btns"><button type="button" class="primary" id="new">＋ Nouveau magazine</button></div></div>
     <div class="card"><div class="table-wrap">${list.length ? `<table class="data"><thead><tr><th>Magazine</th><th>Éditeur</th><th>Périodicité</th>
-      <th class="num">Numéros</th><th class="num">Publicités</th><th class="num">En vente</th><th>Période</th></tr></thead>
+      <th class="num">Numéros</th><th class="num">Publicités</th><th class="num" title="Total des pages de publicité référencées">Pages de pub</th>
+      <th class="num" title="Pages de pub en moyenne par numéro dépouillé">Moy. / numéro</th><th class="num">En vente</th><th>Période</th></tr></thead>
       <tbody>${list.map(m => `<tr class="clickable" data-id="${m.id}"><td><b>${esc(m.name)}</b></td><td>${esc(m.publisher)}</td>
-        <td>${esc(m.frequency)}</td><td class="num">${m.issues_count}</td><td class="num">${m.app_count}</td><td class="num">${m.sale_count}</td>
+        <td>${esc(m.frequency)}</td><td class="num">${m.owned_count}</td><td class="num">${m.app_count}</td>
+        <td class="num">${fmtPages(m.ad_pages)}</td><td class="num">${m.avg_ad_pages == null ? '' : fmtPages(m.avg_ad_pages)}</td><td class="num">${m.sale_count}</td>
         <td class="muted">${m.first_date ? esc(m.first_date) + ' → ' + esc(m.last_date) : ''}</td></tr>`).join('')}</tbody></table>`
       : '<p class="empty">Aucun magazine. Ils peuvent aussi être créés directement depuis la saisie rapide.</p>'}</div></div>`;
   view.addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = `#/magazines/${tr.dataset.id}`; });
   $('#new', view).onclick = async () => { const m = await openMagazineForm(); if (m) location.hash = `#/magazines/${m.id}`; };
 }
 
+// Bloc « complétude » d'un magazine : jauge globale + barres par année
+function completenessBlock(m) {
+  const years = (m.years || []).filter(y => y.year);
+  const max = Math.max(1, ...years.map(y => y.known));
+  return `<div class="complete">
+    <div class="complete-head"><b>${m.owned_count}</b> numéro${m.owned_count > 1 ? 's' : ''} possédé${m.owned_count > 1 ? 's' : ''}
+      sur <b>${m.expected}</b> ${m.total_issues ? 'parus' : 'connus'} ${progress(m.owned_count, m.expected)} <b>${pct(m.owned_count, m.expected)} %</b>
+      ${m.missing > 0 ? `<span class="badge">il en manque ${m.missing}</span>` : (m.expected ? '<span class="badge ok">complet</span>' : '')}</div>
+    ${m.total_issues ? '' : '<div class="muted small">Nombre total de numéros parus inconnu : indiquez-le (✎ Modifier) pour une complétude exacte.</div>'}
+    ${years.length > 1 ? `<div class="year-bars" role="img" aria-label="Numéros possédés par année">${years.map(y => `
+      <div class="yb" title="${esc(y.year)} : ${y.owned} possédé(s) sur ${y.known} connu(s)">
+        <div class="yb-col" style="height:${Math.round(100 * y.known / max)}%"><div class="yb-own" style="height:${pct(y.owned, y.known)}%"></div></div>
+        <div class="yb-l">${esc(y.year.slice(2) ? "'" + y.year.slice(2) : y.year)}</div></div>`).join('')}</div>
+      <div class="muted small legend"><span class="sw own"></span> possédés <span class="sw known"></span> manquants (par année de parution)</div>` : ''}
+  </div>`;
+}
+
 async function pageMagazine(view, params, id) {
+  let showAll = false;
   async function load() {
     const m = await GET(`magazines/${id}`);
+    const issues = showAll ? m.issues : m.issues.filter(i => i.owned);
+    const hiddenN = m.issues.length - issues.length;
     view.innerHTML = `
       <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/magazines">Magazines</a></div><h1>${esc(m.name)}</h1>
-        <div class="sub">${esc([m.publisher, m.frequency].filter(Boolean).join(' · '))}</div></div>
-        <div class="btns"><a class="btn" href="#/recherche?magazine_id=${m.id}">Toutes ses pubs</a>
+        <div class="sub">${esc([m.publisher, m.frequency, m.platform_name, m.start_year && (m.start_year + ' → ' + (m.end_year || '…'))].filter(Boolean).join(' · '))}</div></div>
+        <div class="btns"><a class="btn" href="#/recherche?magazine_id=${m.id}">Toutes ses pubs</a><a class="btn" href="#/catalogue/${m.id}">Catalogue des numéros</a>
           <button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
       <div class="tiles">
-        <div class="tile"><div class="n">${m.issues_count}</div><div class="l">numéros répertoriés</div></div>
+        <div class="tile"><div class="n">${m.owned_count}</div><div class="l">numéros possédés</div></div>
         <div class="tile"><div class="n">${m.app_count}</div><div class="l">publicités référencées</div></div>
+        <div class="tile"><div class="n">${fmtPages(m.ad_pages)}</div><div class="l">pages de pub</div></div>
+        <div class="tile"><div class="n">${m.avg_ad_pages == null ? '—' : fmtPages(m.avg_ad_pages)}</div><div class="l">pages de pub par numéro (moyenne)</div></div>
         <div class="tile"><div class="n">${m.sale_count}</div><div class="l">en vente ${MARU}</div></div>
       </div>
       ${m.notes ? `<div class="card">${esc(m.notes)}</div>` : ''}
+      <div class="card"><h2>Complétude de la collection</h2>${completenessBlock(m)}</div>
       <div class="card"><div class="page-head" style="margin-bottom:8px"><h2>Numéros</h2>
-        <button type="button" class="primary" id="new-issue">＋ Nouveau numéro</button></div>
-        <div class="table-wrap">${m.issues.length ? `<table class="data"><thead><tr><th></th><th>Numéro</th><th>Date</th>
-          <th class="num">Pubs</th><th class="num">En vente</th><th>Remarques</th></tr></thead>
-          <tbody>${m.issues.map(i => `<tr class="clickable" data-id="${i.id}"><td class="thumb">${thumbImg(i.thumb_url)}</td>
-            <td><b>n°${esc(i.number)}</b></td><td>${esc(i.date || '—')}</td><td class="num">${i.app_count}</td>
+        <div class="btns">${hiddenN || showAll ? `<label class="check"><input type="checkbox" id="all" ${showAll ? 'checked' : ''}> afficher aussi les ${m.issues.length - m.owned_count} manquants</label>` : ''}
+        <button type="button" class="primary" id="new-issue">＋ Nouveau numéro</button></div></div>
+        <div class="table-wrap" id="issues">${issues.length ? `<table class="data"><thead><tr><th></th><th>Numéro</th><th>Date</th>
+          <th class="num">Pubs</th><th class="num">Pages de pub</th><th class="num">En vente</th><th>Remarques</th></tr></thead>
+          <tbody>${issues.map(i => `<tr class="clickable ${i.owned ? '' : 'missing'}" data-id="${i.id}"><td class="thumb">${thumbImg(i.thumb_url)}</td>
+            <td><b>n°${esc(i.number)}</b>${i.owned ? '' : ' <span class="badge gray">manquant</span>'}</td><td>${esc(fmtDate(i) || '—')}</td><td class="num">${i.app_count}</td>
+            <td class="num">${i.ad_pages ? fmtPages(i.ad_pages) + (i.pages ? ` <span class="muted">/ ${i.pages}</span>` : '') : ''}</td>
             <td class="num">${i.sale_count}</td><td class="notes">${esc(i.notes)}</td></tr>`).join('')}</tbody></table>`
           : '<p class="empty">Aucun numéro.</p>'}</div></div>`;
-    $('.card .table-wrap', view)?.addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = `#/numeros/${tr.dataset.id}`; });
+    $('#issues', view).addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = `#/numeros/${tr.dataset.id}`; });
+    $('#all', view)?.addEventListener('change', e => { showAll = e.target.checked; load(); });
     $('#edit', view).onclick = async () => { if (await openMagazineForm(m)) load(); };
     $('#new-issue', view).onclick = async () => { const i = await openIssueForm({ magazine_id: m.id }); if (i) location.hash = `#/numeros/${i.id}`; };
     $('#del', view).onclick = async () => {
@@ -1449,8 +1513,10 @@ async function pageIssue(view, params, id) {
     const i = await GET(`issues/${id}`);
     view.innerHTML = `
       <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/magazines">Magazines</a> › <a href="#/magazines/${i.magazine_id}">${esc(i.magazine_name)}</a></div>
-        <h1>${esc(i.magazine_name)} n°${esc(i.number)}</h1><div class="sub">${i.date ? 'Paru le ' + esc(i.date) : 'Date inconnue'}
-        · ${plural(i.app_count, 'pub référencée', 'pubs référencées')}</div></div>
+        <h1>${esc(i.magazine_name)} n°${esc(i.number)} ${i.owned ? '' : '<span class="badge">manquant</span>'}</h1>
+        <div class="sub">${i.date ? 'Paru : ' + esc(fmtDate(i)) : 'Date inconnue'}
+        · ${plural(i.app_count, 'pub référencée', 'pubs référencées')}
+        · ${fmtPages(i.ad_pages)} page${i.ad_pages > 1 ? 's' : ''} de pub${i.pages ? ` sur ${i.pages} (${pct(i.ad_pages, i.pages)} %)` : ''}</div></div>
         <div class="btns"><a class="btn primary" href="#/saisie?issue=${i.id}">＋ Saisir des pubs dans ce numéro</a>
           <button type="button" id="edit">✎ Modifier</button><button type="button" class="danger" id="del">Supprimer</button></div></div>
       <div class="grid-detail">
@@ -1468,6 +1534,180 @@ async function pageIssue(view, params, id) {
     };
   }
   await load();
+}
+
+// ---------------------------------------------------------------------------
+// Catalogue : tous les magazines parus (même non possédés) et complétude
+// ---------------------------------------------------------------------------
+// « 3, 5, 7-12 » : liste compacte de numéros
+function numRanges(nums) {
+  const ints = nums.filter(n => /^\d+$/.test(n)).map(Number).sort((a, b) => a - b);
+  const other = nums.filter(n => !/^\d+$/.test(n));
+  const out = [];
+  for (let k = 0; k < ints.length; k++) {
+    let j = k;
+    while (j + 1 < ints.length && ints[j + 1] === ints[j] + 1) j++;
+    out.push(j > k ? `${ints[k]}-${ints[j]}` : String(ints[k]));
+    k = j;
+  }
+  return out.concat(other).join(', ');
+}
+
+async function pageCatalogue(view, params) {
+  const list = await GET('magazines');
+  const tot = list.reduce((a, m) => ({ own: a.own + m.owned_count, exp: a.exp + m.expected }), { own: 0, exp: 0 });
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Catalogue des magazines</h1>
+      <div class="sub">Tous les magazines parus, même ceux que vous n'avez pas encore : indiquez le nombre de numéros parus,
+      générez la liste des numéros, puis cochez ceux que vous avez. Une pub saisie dans un numéro le marque « possédé ».</div></div>
+      <div class="btns"><button type="button" class="primary" id="new">＋ Ajouter un magazine</button></div></div>
+    <div class="statbar"><span><b>${list.length}</b> magazine${list.length > 1 ? 's' : ''}</span>
+      <span><b>${tot.own}</b> numéros possédés sur <b>${tot.exp}</b></span><span class="nowrap">${progress(tot.own, tot.exp)} <b>${pct(tot.own, tot.exp)} %</b></span>
+      <span>il en manque <b>${tot.exp - tot.own}</b></span></div>
+    <div class="toolbar" id="tb"><input type="search" name="q" placeholder="Filtrer les magazines…">
+      <select name="tri"><option value="nom">Trier par nom</option><option value="manque">Les plus incomplets d'abord</option>
+        <option value="complet">Les plus complets d'abord</option></select></div>
+    <div class="card"><div class="table-wrap" id="list"></div></div>`;
+  const tb = $('#tb', view);
+  function draw() {
+    const q = norm($('[name=q]', tb).value.trim()), tri = $('[name=tri]', tb).value;
+    let rows = list.filter(m => !q || norm(m.name + ' ' + m.publisher + ' ' + (m.platform_name || '')).includes(q));
+    if (tri === 'manque') rows.sort((a, b) => b.missing - a.missing);
+    if (tri === 'complet') rows.sort((a, b) => pct(b.owned_count, b.expected) - pct(a.owned_count, a.expected));
+    $('#list', view).innerHTML = rows.length ? `<table class="data"><thead><tr><th>Magazine</th><th>Console</th><th>Période</th>
+      <th class="num">Possédés</th><th class="num">Parus</th><th>Complétude</th><th class="num">Il manque</th></tr></thead>
+      <tbody>${rows.map(m => `<tr class="clickable" data-id="${m.id}"><td><b>${esc(m.name)}</b><div class="muted">${esc(m.publisher)}</div></td>
+        <td>${esc(m.platform_name || '')}</td>
+        <td class="muted nowrap">${m.start_year ? esc(m.start_year + ' → ' + (m.end_year || '…')) : ''}</td>
+        <td class="num">${m.owned_count}</td><td class="num">${m.expected}${m.total_issues ? '' : ' <span class="muted" title="Nombre de numéros parus non renseigné : ce sont les numéros connus">?</span>'}</td>
+        <td class="nowrap">${progress(m.owned_count, m.expected)} ${pct(m.owned_count, m.expected)} %</td>
+        <td class="num"><b>${m.missing || ''}</b></td></tr>`).join('')}</tbody></table>`
+      : '<p class="empty">Aucun magazine.</p>';
+  }
+  $('#list', view).addEventListener('click', e => { const tr = e.target.closest('tr[data-id]'); if (tr) location.hash = `#/catalogue/${tr.dataset.id}`; });
+  tb.addEventListener('input', draw);
+  $('#new', view).onclick = async () => { const m = await openMagazineForm(); if (m) location.hash = `#/catalogue/${m.id}`; };
+  draw();
+}
+
+async function pageCatalogueMag(view, params, id) {
+  let filter = 'tous';
+  async function load() {
+    const m = await GET(`magazines/${id}`);
+    const sorted = [...m.issues].sort((a, b) => String(a.number).localeCompare(String(b.number), 'fr', { numeric: true }));
+    const shown = sorted.filter(i => filter === 'tous' || (filter === 'possedes' ? i.owned : !i.owned));
+    const missing = sorted.filter(i => !i.owned).map(i => i.number);
+    view.innerHTML = `
+      <div class="page-head"><div><div class="crumbs">${backBtn()}<a href="#/catalogue">Catalogue</a></div><h1>${esc(m.name)}</h1>
+        <div class="sub">${esc([m.publisher, m.frequency, m.platform_name, m.start_year && (m.start_year + ' → ' + (m.end_year || '…'))].filter(Boolean).join(' · '))}</div></div>
+        <div class="btns"><a class="btn" href="#/magazines/${m.id}">Fiche du magazine (pubs)</a><button type="button" id="edit">✎ Modifier</button></div></div>
+      <div class="card">${completenessBlock(m)}</div>
+      <div class="card"><h2>Générer la liste des numéros</h2>
+        <form class="gen-row" id="gen">de n° <input name="de" type="number" min="0" value="1" inputmode="numeric">
+          à n° <input name="a" type="number" min="0" value="${m.total_issues || ''}" placeholder="${m.total_issues || '100'}" inputmode="numeric">
+          <button type="submit">Générer</button>
+          <span class="muted small">Crée les numéros qui n'existent pas encore, marqués « manquants ». Ceux déjà là ne changent pas.</span></form></div>
+      <div class="card"><div class="page-head" style="margin-bottom:8px"><h2>Numéros (${sorted.length})</h2>
+        <div class="seg" id="seg">${[['tous', 'Tous'], ['possedes', `Possédés (${m.owned_count})`], ['manquants', `Manquants (${missing.length})`]]
+          .map(([k, l]) => `<button type="button" data-f="${k}" class="${filter === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        <p class="muted small">Touchez un numéro pour le marquer possédé ✓ ou manquant.</p>
+        <div class="num-grid" id="grid">${shown.map(i => `<button type="button" class="num-chip ${i.owned ? 'own' : ''}" data-id="${i.id}"
+          title="n°${esc(i.number)}${fmtDate(i) ? ' · ' + esc(fmtDate(i)) : ''}${i.app_count ? ' · ' + plural(i.app_count, 'pub') : ''}">${i.owned ? '✓ ' : ''}${esc(i.number)}</button>`).join('')
+          || '<p class="empty">Aucun numéro. Utilisez « Générer » ci-dessus, ou saisissez des pubs.</p>'}</div>
+        ${missing.length ? `<div class="missing-list"><b>Il me manque (${missing.length}) :</b> <span id="miss">${esc(numRanges(missing))}</span>
+          <button type="button" id="copy" class="small-txt">Copier</button></div>` : ''}</div>`;
+    $('#edit', view).onclick = async () => { if (await openMagazineForm(m)) load(); };
+    $('#seg', view).onclick = e => { const b = e.target.closest('[data-f]'); if (b) { filter = b.dataset.f; load(); } };
+    $('#gen', view).onsubmit = async e => {
+      e.preventDefault();
+      const f = e.target.elements;
+      if (!f.a.value) { toast('Indiquez le dernier numéro', 'err'); return f.a.focus(); }
+      const r = await POST(`magazines/${m.id}/generer`, { de: f.de.value, a: f.a.value });
+      invalidate();
+      toast(r.crees ? `${plural(r.crees, 'numéro créé', 'numéros créés')}` : 'Tous ces numéros existaient déjà');
+      load();
+    };
+    $('#grid', view).onclick = async e => {
+      const b = e.target.closest('[data-id]');
+      if (!b) return;
+      const i = m.issues.find(x => x.id === +b.dataset.id);
+      if (i.owned && i.app_count && !await confirmBox(`Le n°${i.number} contient ${plural(i.app_count, 'pub référencée', 'pubs référencées')}. Le marquer quand même « manquant » ?`, 'Marquer manquant')) return;
+      await PUT(`issues/${i.id}`, { owned: i.owned ? 0 : 1 });
+      invalidate();
+      load();
+    };
+    $('#copy', view)?.addEventListener('click', async () => {
+      const txt = `${m.name} : il me manque ${numRanges(missing)}`;
+      try { await navigator.clipboard.writeText(txt); toast('Liste copiée'); } catch (_) { toast(txt); }
+    });
+  }
+  await load();
+}
+
+// ---------------------------------------------------------------------------
+// Statistiques : chiffres regroupés (par magazine, plateforme, éditeur…) avec filtres
+// ---------------------------------------------------------------------------
+const STAT_GROUPS = [['magazine', 'Magazine', 'magazine_id'], ['plateforme', 'Plateforme', 'platform_id'], ['editeur', 'Éditeur', 'publisher'],
+  ['genre', 'Type de jeu', 'genre'], ['licence', 'Licence', 'licence'], ['serie', 'Série', 'series_id'],
+  ['annee', 'Année de parution', 'annee'], ['annee_jeu', 'Année de sortie du jeu', 'annee_jeu'], ['jeu', 'Jeu', 'game_id']];
+const STAT_MEASURES = [['n', 'Parutions'], ['ads', 'Pubs différentes'], ['pages', 'Pages de pub'], ['games', 'Jeux'], ['issues', 'Numéros']];
+
+async function pageStats(view, params) {
+  const meta = await getMeta();
+  const opt = list => '<option value="">Tous</option>' + list.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('');
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Statistiques</h1><div class="sub">Choisissez comment regrouper, et filtrez si besoin (filtre vide = tout).</div></div>
+      <div class="btns"><button type="button" id="reset">Réinitialiser</button></div></div>
+    <form class="card filters" id="filters" autocomplete="off">
+      <label class="field"><span>Regrouper par</span><select name="par">${STAT_GROUPS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+      <label class="field"><span>Barres</span><select name="mesure">${STAT_MEASURES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+      <label class="field"><span>Magazine</span><select name="magazine_id">${opt(meta.magazines)}</select></label>
+      <label class="field"><span>Plateforme</span><select name="platform_id">${opt(meta.platforms)}</select></label>
+      <label class="field"><span>Éditeur</span><select name="publisher">${optVals(meta.publishers)}</select></label>
+      <label class="field"><span>Type de jeu</span><select name="genre">${optVals(meta.genres)}</select></label>
+      <label class="field"><span>Licence</span><select name="licence">${optVals(meta.licences)}</select></label>
+      <label class="field"><span>Série</span><select name="series_id">${opt(meta.series)}</select></label>
+      <label class="field"><span>Année de parution</span><select name="annee">${optVals(meta.years, 'Toutes')}</select></label>
+      <label class="field"><span>Année de sortie du jeu</span><select name="annee_jeu">${optVals(meta.game_years.map(String), 'Toutes')}</select></label>
+      <label class="field"><span>En vente</span><select name="vente"><option value="">Tous</option><option value="1">${MARU} Oui</option><option value="0">${BATSU} Non</option></select></label>
+    </form>
+    <div class="statbar" id="total"></div>
+    <div class="card"><div id="res"></div></div>`;
+  const form = $('#filters', view);
+  for (const [k, v] of Object.entries(params)) if (form.elements[k]) form.elements[k].value = v;
+  async function run() {
+    const f = {};
+    for (const e of form.elements) if (e.name) f[e.name] = e.value;
+    history.replaceState(null, '', '#/stats?' + qs(f));
+    const res = await GET('stats?' + qs(f));
+    const t = res.total, meas = f.mesure || 'n';
+    $('#total', view).innerHTML = `<span><b>${t.total}</b> parution${t.total > 1 ? 's' : ''}</span>
+      <span><b>${t.ads}</b> pub${t.ads > 1 ? 's' : ''} différente${t.ads > 1 ? 's' : ''}</span><span><b>${t.games}</b> jeu${t.games > 1 ? 'x' : ''}</span>
+      <span><b>${t.issues}</b> numéro${t.issues > 1 ? 's' : ''}</span><span><b>${fmtPages(t.pages)}</b> page${t.pages > 1 ? 's' : ''} de pub</span>
+      <span><b>${t.pages_per_issue == null ? '—' : fmtPages(t.pages_per_issue)}</b> page${t.pages_per_issue > 1 ? 's' : ''} de pub par numéro</span>`;
+    const [, groupLabel, param] = STAT_GROUPS.find(g => g[0] === res.par);
+    const max = Math.max(1, ...res.groups.map(g => g[meas]));
+    const searchLink = g => {
+      if (g.key == null || g.key === '' || res.par === 'annee_jeu') return null;
+      const q = { ...f, [param]: g.key };
+      delete q.par; delete q.mesure;
+      return '#/recherche?' + qs(q);
+    };
+    $('#res', view).innerHTML = res.groups.length ? `
+      ${res.par === 'plateforme' ? '<p class="muted small">Une pub annoncée sur plusieurs plateformes compte pour chacune.</p>' : ''}
+      <div class="table-wrap"><table class="data stats"><thead><tr><th>${groupLabel}</th><th class="bar-col">${esc(STAT_MEASURES.find(m => m[0] === meas)[1])}</th>
+        <th class="num">Parutions</th><th class="num">Pubs</th><th class="num">Jeux</th><th class="num">Numéros</th><th class="num">Pages de pub</th>
+        <th class="num" title="Pages de pub par numéro">Pages / numéro</th></tr></thead>
+      <tbody>${res.groups.map(g => { const link = searchLink(g); const lbl = g.label === '' || g.label == null ? '<span class="muted">(non renseigné)</span>' : esc(g.label);
+        return `<tr><td>${link ? `<a href="${link}" title="Voir ces parutions">${lbl}</a>` : lbl}</td>
+        <td class="bar-col"><span class="hbar" style="width:${Math.max(1, Math.round(100 * g[meas] / max))}%"></span><span class="hbar-v">${meas === 'pages' ? fmtPages(g[meas]) : g[meas]}</span></td>
+        <td class="num">${g.n}</td><td class="num">${g.ads}</td><td class="num">${g.games}</td><td class="num">${g.issues}</td>
+        <td class="num">${fmtPages(g.pages)}</td><td class="num">${g.pages_per_issue == null ? '' : fmtPages(g.pages_per_issue)}</td></tr>`; }).join('')}</tbody></table></div>`
+      : '<p class="empty">Rien à compter avec ces filtres.</p>';
+  }
+  form.addEventListener('change', run);
+  $('#reset', view).onclick = () => { form.reset(); run(); };
+  await run();
 }
 
 // ---------------------------------------------------------------------------
@@ -1818,6 +2058,9 @@ const ROUTES = [
   [/^\/magazines$/, pageMagazines, 'magazines'],
   [/^\/magazines\/(\d+)$/, pageMagazine, 'magazines'],
   [/^\/numeros\/(\d+)$/, pageIssue, 'magazines'],
+  [/^\/catalogue$/, pageCatalogue, 'catalogue'],
+  [/^\/catalogue\/(\d+)$/, pageCatalogueMag, 'catalogue'],
+  [/^\/stats$/, pageStats, 'stats'],
   [/^\/listes$/, pageLists, 'listes'],
   [/^\/export$/, pageExport, 'export'],
   [/^\/projets$/, pageProjects, 'projets'],
