@@ -6,6 +6,10 @@ Deux versions :
   avec images, saisie rapide, recherche croisée, exports et sauvegardes. **Version recommandée.**
 - **Le fichier Excel** (`BDD_Pubs.xlsx`), décrit ci-dessous, pour qui préfère rester dans un tableur.
 
+Développement : voir [`CLAUDE.md`](CLAUDE.md) (architecture, règles, tests) et
+[`docs/FEUILLE_DE_ROUTE.md`](docs/FEUILLE_DE_ROUTE.md) (améliorations prévues).
+Tests : `bash tests/lancer_tests.sh`.
+
 ---
 
 Un simple fichier Excel (`BDD_Pubs.xlsx`), à ouvrir dans Excel ou LibreOffice, sans rien installer.

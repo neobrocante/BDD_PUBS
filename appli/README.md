@@ -147,6 +147,8 @@ dans le sous-dossier `sauvegardes` des données (15 dernières).
 
 ## Pour aller plus loin (technique)
 
+Architecture, règles de développement et tests : voir `CLAUDE.md` à la racine du dépôt.
+
 - `app.py` : serveur Python, bibliothèque standard uniquement ; base SQLite `data/bdd_pubs.sqlite`.
 - `static/` : l'interface (HTML/CSS/JavaScript, sans dépendance ni connexion Internet).
 - Options : `--port 8766`, `--no-browser`, `--arret-auto` (s'arrêter quand plus aucun onglet n'est ouvert),
