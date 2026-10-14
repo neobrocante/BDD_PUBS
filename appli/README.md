@@ -132,9 +132,9 @@ de la série de jeux). Les valeurs déjà utilisées sont proposées en tapant. 
 dans la Recherche, la liste des Jeux et les Statistiques.
 
 - **Lecture romaji** : remplie toute seule d'après le titre original (`ファイナルファンタジーVII` →
-  `fainarufantajī VII`), modifiable. Les kana sont toujours lus ; les **kanji** ne le sont que si
-  le module facultatif `pykakasi` est installé (sinon ils restent tels quels, à compléter à la
-  main). Page Jeux : « あ→a Remplir les romaji » pour les jeux déjà saisis. La recherche trouve
+  `fainarufantajī VII`, `サクラ大戦` → `sakura taisen`), modifiable. L'exécutable Windows lit
+  aussi les **kanji** (module `pykakasi` inclus) ; avec `BDD Pubs.pyw`, les kanji ne sont lus que
+  si on a installé ce module (`pip install pykakasi`), sinon ils restent tels quels. Page Jeux : « あ→a Remplir les romaji » pour les jeux déjà saisis. La recherche trouve
   aussi les jeux par leur romaji.
 - **🔎 Chercher ce jeu en ligne** (sous le titre, dans la fiche d'un jeu) : propose les fiches de
   **Wikidata** (base libre et gratuite, sans compte) ; toucher la bonne remplit les cases vides
@@ -212,6 +212,9 @@ Voir « Vos données » plus haut : sauvegarde automatique quotidienne, restaura
 dans le sous-dossier `sauvegardes` des données (15 dernières).
 
 ## Pour aller plus loin (technique)
+
+Composant tiers inclus dans l'exécutable Windows : **pykakasi** (lecture des kanji en romaji),
+logiciel libre sous licence GPL v3. Le code de BDD Pubs est public sur GitHub.
 
 Architecture, règles de développement et tests : voir `CLAUDE.md` à la racine du dépôt.
 

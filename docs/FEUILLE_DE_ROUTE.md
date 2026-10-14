@@ -6,7 +6,7 @@
 > puis cocher la case ici. Poser les « questions ouvertes » au propriétaire **avant** de coder les
 > points concernés (il répond en français, à l'oral, souvent sur téléphone : questions courtes).
 
-État au 13/10/2026 : version `2026.10.13.4`, toute la liste du testeur est traitée, tous les tests passent, release publiée.
+État au 14/10/2026 : version `2026.10.14`, toute la liste du testeur est traitée, tous les tests passent, release publiée.
 
 ## Demandes du testeur (reçues le 13/10/2026)
 
@@ -148,10 +148,9 @@ Reste ouvert : demander au testeur un vrai fichier pour vérifier la reconnaissa
 Fait le 13/10 (`2026.10.13.4`). **Romaji** : `kana_romaji()` (Hepburn, macrons pour « ー »,
 sans dépendance), rempli tout seul à la création d'un jeu / pendant la frappe, modifiable,
 bouton « Remplir les romaji » (page Jeux), recherche aussi sur le romaji. Les **kanji** ne sont lus
-que si `pykakasi` est installé (facultatif, détecté au lancement) ; **il n'est pas inclus dans
-l'exécutable** tant que le propriétaire n'a pas validé la licence GPL v3 (pour l'inclure : ajouter
-`pykakasi` au `pip install` du workflow, et `--collect-data pykakasi` aux deux commandes
-PyInstaller). **Wikidata** : `search_games_online()` (bouton « 🔎 Chercher ce jeu en ligne » dans la
+que si `pykakasi` est installé (facultatif, détecté au lancement). **Inclus dans l'exécutable**
+depuis le 14/10 (`--collect-all pykakasi`, accord du propriétaire : usage non commercial, licence
+GPL v3 acceptée ; le workflow vérifie sur Windows que « サクラ大戦 » donne « sakura taisen »). **Wikidata** : `search_games_online()` (bouton « 🔎 Chercher ce jeu en ligne » dans la
 fiche jeu, activé par défaut, réglage sur la page Import / Export), cases vides remplies seulement,
 proxy lu uniquement dans les variables d'environnement (pas de registre). Testé uniquement avec
 des réponses simulées (`tests/wikidata_faux.json`) : **à faire valider en vrai** par le

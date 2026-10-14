@@ -69,7 +69,7 @@ DATA_DIR = os.environ.get("BDD_PUBS_DATA") or default_data_dir()
 LEGACY_DATA_DIR = os.path.join(HERE, "data")  # anciennes versions : données à côté du programme
 DEFAULT_BACKUP_DIR = os.environ.get("BDD_PUBS_SAUVEGARDES") or os.path.join(documents_dir(), "BDD Pubs - sauvegardes")
 
-APP_VERSION = "2026.10.13.4"
+APP_VERSION = "2026.10.14"
 
 
 def build_id():

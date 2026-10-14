@@ -23,8 +23,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Installer PyInstaller
-        run: python -m pip install --upgrade pyinstaller
+      - name: "Installer PyInstaller et pykakasi (lecture des kanji en romaji, licence GPL v3)"
+        run: python -m pip install --upgrade pyinstaller pykakasi
 
       - name: Construire BDD Pubs.exe (fichier unique)
         working-directory: appli
@@ -32,6 +32,7 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --windowed
           --name "BDD Pubs" --icon icone.ico
           --add-data "static;static"
+          --collect-all pykakasi
           --distpath dist_fichier --workpath build_fichier
           app.py
 
@@ -41,6 +42,7 @@ jobs:
           pyinstaller --noconfirm --clean --onedir --windowed
           --name "BDD Pubs" --icon icone.ico
           --add-data "static;static"
+          --collect-all pykakasi
           --distpath dist_dossier --workpath build_dossier
           app.py
 
@@ -68,6 +70,9 @@ jobs:
             if ($ads.Count -lt 1) { throw "$label : projet de démonstration vide" }
             $img = Invoke-WebRequest ("http://127.0.0.1:8765" + $ads[0].thumb_url) -UseBasicParsing
             if ($img.StatusCode -ne 200) { throw "$label : image de démo introuvable" }
+            # サクラ大戦 : les kanji doivent être lus (pykakasi bien embarqué)
+            $ro = Invoke-WebRequest "http://127.0.0.1:8765/api/romaji?texte=%E3%82%B5%E3%82%AF%E3%83%A9%E5%A4%A7%E6%88%A6" -UseBasicParsing | ConvertFrom-Json
+            if (-not $ro.complet -or $ro.romaji -notmatch "taisen") { throw "$label : lecture romaji des kanji absente ($($ro.romaji))" }
             Invoke-WebRequest "http://127.0.0.1:8765/api/quitter" -Method Post -Body "{}" -ContentType "application/json" -UseBasicParsing | Out-Null
             if (-not $p.WaitForExit(15000)) { Stop-Process $p -Force; throw "$label : le bouton Quitter n'arrête pas l'application" }
             Write-Host "OK ($label) : l'exécutable démarre, sert l'interface et s'arrête proprement."
@@ -83,7 +88,8 @@ jobs:
           ========
 
           Double-cliquer sur « BDD Pubs.exe » : l'application s'ouvre dans le navigateur.
-          Elle s'arrête toute seule quand on ferme son onglet (ou avec le bouton « Quitter »).
+          Elle reste lancée (sans fenêtre) jusqu'au bouton « Quitter » en haut à droite :
+          on peut fermer l'onglet et revenir plus tard sur http://localhost:8765
 
           Les données (base, photos, projets) sont rangées à part, dans
           %LOCALAPPDATA%\BDD Pubs\data : mettre à jour ou supprimer le programme n'y touche pas.
@@ -92,6 +98,10 @@ jobs:
 
           1er lancement : si Windows affiche « Windows a protégé votre ordinateur »,
           cliquer sur « Informations complémentaires » puis « Exécuter quand même ».
+
+          Composant inclus : pykakasi (lecture des kanji en romaji), logiciel libre sous
+          licence GPL v3 : https://codeberg.org/miurahr/pykakasi
+          Code source de BDD Pubs : https://github.com/neobrocante/BDD_PUBS
           "@
           New-Item -ItemType Directory -Force paquet_fichier | Out-Null
           Copy-Item "appli\dist_fichier\BDD Pubs.exe" paquet_fichier\
