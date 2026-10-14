@@ -110,7 +110,10 @@ jobs:
           Copy-Item "appli\dist_dossier\BDD Pubs" paquet_dossier\ -Recurse
           $lisez | Out-File -Encoding utf8 "paquet_dossier\BDD Pubs\LISEZMOI.txt"
           # garantie : le paquet ne contient jamais de données (mettre à jour ne doit rien écraser)
-          $fuite = Get-ChildItem -Recurse paquet_fichier, paquet_dossier | Where-Object { $_.Name -in @("data", "bdd_pubs.sqlite", "projets.json") }
+          # (le dossier « data » du dictionnaire pykakasi est normal : ce ne sont pas des données utilisateur)
+          $fuite = Get-ChildItem -Recurse paquet_fichier, paquet_dossier | Where-Object {
+            ($_.Name -in @("bdd_pubs.sqlite", "projets.json", "reglages.json", "journal.txt")) -or
+            ($_.PSIsContainer -and $_.Name -eq "data" -and $_.FullName -notmatch '\\pykakasi\\data$') }
           if ($fuite) { $fuite | ForEach-Object { Write-Host $_.FullName }; throw "Des données se sont glissées dans le paquet" }
           Write-Host "OK : aucun dossier data dans les paquets."
 
